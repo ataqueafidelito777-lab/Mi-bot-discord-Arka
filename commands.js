@@ -4,8 +4,8 @@ require('dotenv').config();
 const commands = [
 
     // ── General ───────────────────────────────────────────────────────────
-    { name: 'ping', description: 'Muestra la latencia del bot.' },
-    { name: 'help', description: 'Muestra todos los comandos disponibles.' },
+    { name: 'ping',      description: 'Muestra la latencia del bot.' },
+    { name: 'help',      description: 'Muestra todos los comandos disponibles.' },
     { name: 'dashboard', description: 'Resumen visual completo de pedidos y clientes.' },
 
     // ── Pedidos ───────────────────────────────────────────────────────────
@@ -92,6 +92,24 @@ const commands = [
             { name: 'cantidad', type: ApplicationCommandOptionType.Integer, description: 'Cantidad disponible',         required: false },
             { name: 'precio',   type: ApplicationCommandOptionType.String,  description: 'Precio del ítem',            required: false },
             { name: 'notas',    type: ApplicationCommandOptionType.String,  description: 'Notas adicionales del ítem', required: false }
+        ]
+    },
+    {
+        name: 'stock-bulk',
+        description: 'Agrega o reemplaza varios ítems de stock de golpe (solo admins).',
+        options: [
+            {
+                name: 'items', type: ApplicationCommandOptionType.String, required: true,
+                description: 'Un ítem por línea: Nombre | cantidad | precio | notas  (precio y notas opcionales)'
+            },
+            {
+                name: 'modo', type: ApplicationCommandOptionType.String, required: false,
+                description: '¿Agregar al stock actual o reemplazarlo todo?',
+                choices: [
+                    { name: 'Agregar al stock actual',  value: 'agregar'    },
+                    { name: 'Reemplazar todo el stock', value: 'reemplazar' }
+                ]
+            }
         ]
     },
 
@@ -250,6 +268,16 @@ const commands = [
                 description: 'Mensaje personalizado. Usa {usuario} y {servidor} como variables.',
                 required: true
             }
+        ]
+    },
+    {
+        name: 'settiers',
+        description: 'Configura los roles que se asignan por tier de compras (solo admins).',
+        options: [
+            { name: 'bronce', type: ApplicationCommandOptionType.Role, description: 'Rol para Bronce (1+ compra)',   required: false },
+            { name: 'plata',  type: ApplicationCommandOptionType.Role, description: 'Rol para Plata (5+ compras)',  required: false },
+            { name: 'oro',    type: ApplicationCommandOptionType.Role, description: 'Rol para Oro (10+ compras)',   required: false },
+            { name: 'vip',    type: ApplicationCommandOptionType.Role, description: 'Rol para VIP (20+ compras)',   required: false }
         ]
     }
 ];

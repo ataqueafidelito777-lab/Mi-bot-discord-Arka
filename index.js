@@ -18,27 +18,48 @@ const path = require('path');
 require('dotenv').config();
 
 // ─────────────────────────────────────────────
-//  BANNER — URL pública de tu imagen de Aurex
-//  Reemplaza esta URL por el link directo a tu
-//  imagen subida a imgur.com o similar
+//  BANNER — Pon aquí tu link directo de Imgur
+//  Ejemplo: https://i.imgur.com/AbCdEfG.png
 // ─────────────────────────────────────────────
 const BANNER_URL = 'https://i.imgur.com/REEMPLAZA.png';
 
 // ─────────────────────────────────────────────
-//  PERSISTENCIA
+//  TIERS — Umbrales fijos de compras
+// ─────────────────────────────────────────────
+const TIER_UMBRALES = [
+    { nombre: 'bronce', minCompras: 1  },
+    { nombre: 'plata',  minCompras: 5  },
+    { nombre: 'oro',    minCompras: 10 },
+    { nombre: 'vip',    minCompras: 20 }
+];
+
+// ─────────────────────────────────────────────
+//  PERSISTENCIA — con caché ligero en memoria
 // ─────────────────────────────────────────────
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
+// Caché en memoria para reducir lecturas de disco
+const _cache = new Map();
+
 function loadData(guildId) {
+    if (_cache.has(`d_${guildId}`)) return _cache.get(`d_${guildId}`);
     const file = path.join(DATA_DIR, `${guildId}.json`);
-    if (!fs.existsSync(file)) return defaultData();
-    try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
-    catch { return defaultData(); }
+    if (!fs.existsSync(file)) {
+        const d = defaultData();
+        _cache.set(`d_${guildId}`, d);
+        return d;
+    }
+    try {
+        const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+        _cache.set(`d_${guildId}`, d);
+        return d;
+    } catch { return defaultData(); }
 }
 function saveData(guildId, data) {
+    _cache.set(`d_${guildId}`, data);
     const file = path.join(DATA_DIR, `${guildId}.json`);
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(file, JSON.stringify(data), 'utf8'); // sin indent = menos bytes
 }
 function defaultData() {
     return {
@@ -48,7 +69,8 @@ function defaultData() {
             logChannelId:    null,
             dmEnabled:       true,
             resenaChannelId: null,
-            dmCierreTexto:   null
+            dmCierreTexto:   null,
+            tierRoles:       {}   // { bronce: roleId, plata: roleId, oro: roleId, vip: roleId }
         },
         afk:      {},
         stock:    [],
@@ -56,33 +78,42 @@ function defaultData() {
     };
 }
 
-// tickets_<guildId>.json — separado por servidor
 function loadTickets(guildId) {
+    if (_cache.has(`t_${guildId}`)) return _cache.get(`t_${guildId}`);
     const file = path.join(DATA_DIR, `tickets_${guildId}.json`);
-    if (!fs.existsSync(file)) return defaultTickets();
-    try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
-    catch { return defaultTickets(); }
+    if (!fs.existsSync(file)) {
+        const d = defaultTickets();
+        _cache.set(`t_${guildId}`, d);
+        return d;
+    }
+    try {
+        const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+        _cache.set(`t_${guildId}`, d);
+        return d;
+    } catch { return defaultTickets(); }
 }
 function saveTickets(guildId, data) {
+    _cache.set(`t_${guildId}`, data);
     const file = path.join(DATA_DIR, `tickets_${guildId}.json`);
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(file, JSON.stringify(data), 'utf8');
 }
 function defaultTickets() {
     return {
         tickets: [],
+        cooldowns: {}, // { userId: timestamp_ultimo_cierre }
         config: {
-            panelMessageId:  null,   // ← ID del mensaje del panel (evita duplicados)
-            panelChannelId:  null,   // ← canal donde está el panel
-            categoryId:      null,
-            logChannelId:    null,
-            vendedorRoleId:  null,
-            staffRoleId:     null
+            panelMessageId: null,
+            panelChannelId: null,
+            categoryId:     null,
+            logChannelId:   null,
+            vendedorRoleId: null,
+            staffRoleId:    null
         }
     };
 }
 
 // ─────────────────────────────────────────────
-//  COOLDOWNS
+//  COOLDOWNS de comandos
 // ─────────────────────────────────────────────
 const cooldowns = new Map();
 function checkCooldown(guildId, userId, comando, segundos) {
@@ -94,6 +125,47 @@ function checkCooldown(guildId, userId, comando, segundos) {
     }
     cooldowns.set(key, ahora);
     return 0;
+}
+
+// ─────────────────────────────────────────────
+//  MANEJO GLOBAL DE ERRORES — evita que el bot
+//  caiga por errores en cualquier servidor
+// ─────────────────────────────────────────────
+process.on('unhandledRejection', (error) => {
+    console.error('❌ [unhandledRejection]', error?.message ?? error);
+});
+process.on('uncaughtException', (error) => {
+    console.error('❌ [uncaughtException]', error?.message ?? error);
+});
+
+// Wrapper seguro para handlers de interacciones
+async function safeHandle(interaction, fn) {
+    try {
+        await fn();
+    } catch (err) {
+        console.error(`❌ [safeHandle] ${interaction.commandName ?? interaction.customId ?? '?'}:`, err?.message ?? err);
+
+        // Detectar si es un error de permisos
+        const esFaltaPermisos =
+            err?.code === 50013 ||
+            err?.message?.toLowerCase().includes('missing permissions') ||
+            err?.message?.toLowerCase().includes('missing access');
+
+        const mensaje = esFaltaPermisos
+            ? '⚠️ **Faltan permisos.** Asegúrate de que el bot tenga permisos suficientes en este canal o servidor (Gestionar canales, Ver canal, Enviar mensajes, etc.).'
+            : '⚠️ Ocurrió un error inesperado. Intenta de nuevo o contacta a un administrador.';
+
+        try {
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply({ content: mensaje, embeds: [], components: [] });
+            } else {
+                await interaction.reply({ content: mensaje, ephemeral: true });
+            }
+        } catch {
+            // Si tampoco se puede responder, solo loguear
+            console.warn('⚠️ No se pudo responder al usuario sobre el error.');
+        }
+    }
 }
 
 // ─────────────────────────────────────────────
@@ -143,6 +215,44 @@ function calcDuracion(start, end) {
     if (dias > 0) return `${dias}d ${hrs % 24}h`;
     if (hrs > 0)  return `${hrs}h ${min % 60}m`;
     return `${min}m`;
+}
+
+// ─────────────────────────────────────────────
+//  TIERS — asignar rol automático al comprar
+// ─────────────────────────────────────────────
+async function actualizarTier(guild, userId, comprasTotal, tierRoles) {
+    if (!tierRoles || Object.keys(tierRoles).length === 0) return;
+
+    // Calcular tier actual según compras
+    let tierActual = null;
+    for (const tier of TIER_UMBRALES) {
+        if (comprasTotal >= tier.minCompras) tierActual = tier.nombre;
+    }
+    if (!tierActual) return;
+
+    const roleId = tierRoles[tierActual];
+    if (!roleId) return;
+
+    try {
+        const miembro = guild.members.cache.get(userId)
+            ?? await guild.members.fetch(userId).catch(() => null);
+        if (!miembro) return;
+
+        // Quitar todos los roles de tier anteriores
+        for (const tier of TIER_UMBRALES) {
+            const rId = tierRoles[tier.nombre];
+            if (rId && rId !== roleId && miembro.roles.cache.has(rId)) {
+                await miembro.roles.remove(rId).catch(() => {});
+            }
+        }
+        // Agregar el nuevo rol si no lo tiene
+        if (!miembro.roles.cache.has(roleId)) {
+            await miembro.roles.add(roleId);
+            console.log(`🎖️ Tier [${tierActual}] asignado a ${miembro.user.tag} en ${guild.name}`);
+        }
+    } catch (err) {
+        console.warn(`⚠️ No se pudo asignar tier a ${userId}:`, err?.message);
+    }
 }
 
 // ─────────────────────────────────────────────
@@ -212,13 +322,14 @@ function buildHelpEmbed() {
             `\`/stats\` \`/top\` \`/dashboard\` \`/perfil\`\n\n` +
             `**📦 Stock**\n` +
             `\`/stock\` — Ver stock disponible\n` +
-            `\`/stock-admin\` — Gestionar stock *(solo admins)*\n\n` +
+            `\`/stock-admin\` — Gestionar stock *(solo admins)*\n` +
+            `\`/stock-bulk\` — Agregar varios ítems de golpe *(solo admins)*\n\n` +
             `**⭐ Reputación**\n` +
             `\`/reseña\` \`/resenas\`\n\n` +
             `**🔧 Utilidades**\n` +
             `\`/afk\` \`/anuncio\` \`/clear\` \`/ping\`\n\n` +
             `**⚙️ Configuración** *(solo admins)*\n` +
-            `\`/setlog\` \`/setresenas\` \`/configdm\` \`/setdm\`\n\n` +
+            `\`/setlog\` \`/setresenas\` \`/configdm\` \`/setdm\` \`/settiers\`\n\n` +
             `**🎫 Tickets**\n` +
             `\`/ticket-setup\` — Configura el panel de tickets`
         )
@@ -298,7 +409,7 @@ const CATEGORIAS = {
 };
 
 // ─────────────────────────────────────────────
-//  TICKETS — PANEL EMBED (reutilizable)
+//  TICKETS — PANEL EMBED
 // ─────────────────────────────────────────────
 function buildPanelEmbed(guildName) {
     return new EmbedBuilder()
@@ -339,10 +450,24 @@ function buildPanelRow() {
 }
 
 // ─────────────────────────────────────────────
+//  TICKETS — LOG helper
+// ─────────────────────────────────────────────
+async function logTicket(guild, tdata, embedLog, archivo = null) {
+    if (!tdata.config.logChannelId) return;
+    try {
+        const canal = guild.channels.cache.get(tdata.config.logChannelId)
+            ?? await guild.channels.fetch(tdata.config.logChannelId).catch(() => null);
+        if (!canal) return;
+        const opts = { embeds: [embedLog] };
+        if (archivo) opts.files = [archivo];
+        await canal.send(opts);
+    } catch (err) {
+        console.warn('⚠️ No se pudo enviar log de ticket:', err?.message);
+    }
+}
+
+// ─────────────────────────────────────────────
 //  TICKETS — SETUP
-//  FIX: Un solo panel por servidor.
-//  Si ya existe, edita el mensaje existente
-//  en lugar de enviar uno nuevo.
 // ─────────────────────────────────────────────
 async function handleTicketSetup(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
@@ -357,7 +482,6 @@ async function handleTicketSetup(interaction) {
     const vendedorRol      = interaction.options.getRole('rol_vendedor') ?? null;
     const staffRol         = interaction.options.getRole('rol_staff')    ?? null;
 
-    // Actualizar config
     tdata.config.categoryId     = categoriaDiscord?.id ?? tdata.config.categoryId;
     tdata.config.logChannelId   = logCanal?.id         ?? tdata.config.logChannelId;
     tdata.config.vendedorRoleId = vendedorRol?.id      ?? tdata.config.vendedorRoleId;
@@ -366,7 +490,6 @@ async function handleTicketSetup(interaction) {
     const embedPanel = buildPanelEmbed(interaction.guild.name);
     const rowPanel   = buildPanelRow();
 
-    // ── Si ya existe un panel, intentar editarlo ──────────────────────────
     let panelActualizado = false;
     if (tdata.config.panelMessageId && tdata.config.panelChannelId) {
         try {
@@ -376,20 +499,15 @@ async function handleTicketSetup(interaction) {
                 if (mensajeAnterior) {
                     await mensajeAnterior.edit({ embeds: [embedPanel], components: [rowPanel] });
                     panelActualizado = true;
-
-                    // Si se cambió de canal, mover el panel (eliminar y reenviar)
                     if (canalAnterior.id !== canal.id) {
                         await mensajeAnterior.delete().catch(() => {});
-                        panelActualizado = false; // forzar reenvío al nuevo canal
+                        panelActualizado = false;
                     }
                 }
             }
-        } catch {
-            panelActualizado = false;
-        }
+        } catch { panelActualizado = false; }
     }
 
-    // ── Si no existe o se cambió de canal, enviar nuevo panel ────────────
     if (!panelActualizado) {
         const mensajeNuevo = await canal.send({ embeds: [embedPanel], components: [rowPanel] });
         tdata.config.panelMessageId = mensajeNuevo.id;
@@ -400,10 +518,10 @@ async function handleTicketSetup(interaction) {
 
     const resumen = [
         `✅ Panel de tickets ${panelActualizado ? 'actualizado' : `enviado a <#${canal.id}>`}`,
-        categoriaDiscord ? `📁 Categoría: **${categoriaDiscord.name}**`   : '',
-        logCanal         ? `📋 Logs: <#${logCanal.id}>`                   : '',
-        vendedorRol      ? `💼 Rol vendedor: <@&${vendedorRol.id}>`       : '',
-        staffRol         ? `🛡️ Rol staff: <@&${staffRol.id}>`             : ''
+        categoriaDiscord ? `📁 Categoría: **${categoriaDiscord.name}**` : '',
+        logCanal         ? `📋 Logs: <#${logCanal.id}>`                 : '',
+        vendedorRol      ? `💼 Rol vendedor: <@&${vendedorRol.id}>`     : '',
+        staffRol         ? `🛡️ Rol staff: <@&${staffRol.id}>`           : ''
     ].filter(Boolean).join('\n');
 
     return interaction.editReply({ content: resumen });
@@ -411,10 +529,8 @@ async function handleTicketSetup(interaction) {
 
 // ─────────────────────────────────────────────
 //  TICKETS — ABRIR
-//  FIX: Un solo ticket activo por usuario
-//  sin importar la categoría.
-//  FIX: Si el canal fue eliminado manualmente,
-//  se limpia el ticket huérfano y se permite abrir uno nuevo.
+//  FIX PRINCIPAL: deferReply primero para evitar
+//  "interacción fallida" mientras se crea el canal
 // ─────────────────────────────────────────────
 async function abrirTicket(interaction, categoriaKey, datosModal = null) {
     const guild = interaction.guild;
@@ -422,38 +538,63 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
     const tdata = loadTickets(guild.id);
     const cat   = CATEGORIAS[categoriaKey];
 
-    // ── Verificar si ya tiene UN ticket abierto (cualquier categoría) ─────
+    // ── Verificar ticket abierto ──────────────────────────────────────────
     const ticketAbierto = tdata.tickets.find(t => t.userId === user.id && t.estado === 'abierto');
     if (ticketAbierto) {
-        // Verificar si el canal aún existe
         const canalExistente = guild.channels.cache.get(ticketAbierto.channelId)
             ?? await guild.channels.fetch(ticketAbierto.channelId).catch(() => null);
-
         if (canalExistente) {
-            // Canal existe — bloquear y redirigir
-            return interaction.reply({
-                content:
-                    `⚠️ Ya tienes un ticket abierto: <#${ticketAbierto.channelId}>\n` +
-                    `Debes cerrarlo antes de abrir uno nuevo.`,
-                ephemeral: true
-            });
+            const msg = `⚠️ Ya tienes un ticket abierto: <#${ticketAbierto.channelId}>\nDebes cerrarlo antes de abrir uno nuevo.`;
+            if (interaction.deferred) return interaction.editReply({ content: msg });
+            return interaction.reply({ content: msg, ephemeral: true });
         } else {
-            // Canal fue eliminado manualmente — limpiar ticket huérfano
-            ticketAbierto.estado    = 'cerrado';
+            ticketAbierto.estado     = 'cerrado';
             ticketAbierto.cerradoPor = 'Sistema (canal eliminado)';
             ticketAbierto.cerradoAt  = Date.now();
             saveTickets(guild.id, tdata);
-            // Continuar y permitir abrir nuevo ticket
         }
     }
 
+    // ── Cooldown de tickets (10 min entre cierres) ────────────────────────
+    if (!tdata.cooldowns) tdata.cooldowns = {};
+    const ultimoCierre = tdata.cooldowns[user.id] ?? 0;
+    const COOLDOWN_MS  = 10 * 60 * 1000; // 10 minutos
+    const restante     = COOLDOWN_MS - (Date.now() - ultimoCierre);
+    if (restante > 0 && ultimoCierre > 0) {
+        const min = Math.ceil(restante / 60000);
+        const msg = `⏳ Debes esperar **${min} minuto(s)** antes de abrir un nuevo ticket.`;
+        if (interaction.deferred) return interaction.editReply({ content: msg });
+        return interaction.reply({ content: msg, ephemeral: true });
+    }
+
+    // ── Verificar permisos del bot ANTES de crear el canal ────────────────
+    const botMember = guild.members.me;
+    if (!botMember.permissions.has(PermissionFlagsBits.ManageChannels)) {
+        const msg = '⚠️ **Faltan permisos.** El bot necesita el permiso **Gestionar canales** para crear tickets.';
+        if (interaction.deferred) return interaction.editReply({ content: msg });
+        return interaction.reply({ content: msg, ephemeral: true });
+    }
+
+    // ── Hacer defer para evitar "interacción fallida" ─────────────────────
+    // Solo si aún no fue deferida (en modals ya fue)
+    if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply({ ephemeral: true });
+    }
+
     // ── Crear canal del ticket ────────────────────────────────────────────
-    const nombreCanal = `${cat.prefijo}-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20)}`;
+    const nombreCanal = `${cat.prefijo}-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) || 'usuario'}`;
 
     const permisos = [
         { id: guild.id,  deny:  [PermissionFlagsBits.ViewChannel] },
         { id: user.id,   allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
     ];
+
+    // Agregar permisos del bot explícitamente
+    permisos.push({
+        id:    botMember.id,
+        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageChannels]
+    });
+
     if (tdata.config.staffRoleId) {
         permisos.push({
             id:    tdata.config.staffRoleId,
@@ -520,10 +661,22 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
 
     await canalTicket.send({ content: menciones.join(' '), embeds: [embedBienvenida], components: [rowCerrar] });
 
-    return interaction.reply({
-        content: `✅ Tu ticket fue creado: <#${canalTicket.id}>`,
-        ephemeral: true
-    });
+    // ── Log: ticket abierto ───────────────────────────────────────────────
+    await logTicket(guild, tdata, new EmbedBuilder()
+        .setColor('#57F287')
+        .setTitle(`📂  Ticket #${ticketId} abierto`)
+        .setDescription(
+            `> 👤  **Usuario:**   <@${user.id}> (\`${user.tag}\`)\n` +
+            `> 🗂️  **Categoría:** ${cat.emoji} \`${cat.label}\`\n` +
+            `> 📌  **Canal:**     <#${canalTicket.id}>`
+        )
+        .setTimestamp()
+    );
+
+    // ── Responder al usuario ──────────────────────────────────────────────
+    const respuesta = { content: `✅ Tu ticket fue creado: <#${canalTicket.id}>` };
+    if (interaction.deferred) return interaction.editReply(respuesta);
+    return interaction.reply({ ...respuesta, ephemeral: true });
 }
 
 // ─────────────────────────────────────────────
@@ -539,8 +692,7 @@ async function cerrarTicket(interaction, ticketId) {
 
     const esAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
     const esStaff = tdata.config.staffRoleId
-        ? interaction.member.roles.cache.has(tdata.config.staffRoleId)
-        : false;
+        ? interaction.member.roles.cache.has(tdata.config.staffRoleId) : false;
     const esDueño = interaction.user.id === ticket.userId;
 
     if (!esAdmin && !esStaff && !esDueño)
@@ -562,6 +714,10 @@ async function cerrarTicket(interaction, ticketId) {
         transcript += `[${new Date(m.createdTimestamp).toLocaleString('es-MX')}] ${m.author.tag}: ${m.content}\n`;
         if (m.embeds.length > 0) transcript += `  [embed adjunto]\n`;
     });
+
+    // Guardar cooldown del usuario
+    if (!tdata.cooldowns) tdata.cooldowns = {};
+    tdata.cooldowns[ticket.userId] = Date.now();
 
     ticket.estado     = 'cerrado';
     ticket.cerradoPor = interaction.user.tag;
@@ -610,28 +766,25 @@ async function cerrarTicket(interaction, ticketId) {
             ?? await guild.members.fetch(ticket.userId).catch(() => null);
         if (miembro) await miembro.send({ embeds: [embedDM], files: [{ attachment: buffer, name: filename }] });
     } catch {
-        console.warn(`No se pudo enviar DM de cierre a ${ticket.userTag}`);
+        console.warn(`⚠️ No se pudo enviar DM de cierre a ${ticket.userTag}`);
     }
 
-    // Log de tickets
-    if (tdata.config.logChannelId) {
-        const logCanal = guild.channels.cache.get(tdata.config.logChannelId);
-        if (logCanal) {
-            const embedLog = new EmbedBuilder()
-                .setColor('#5865F2')
-                .setTitle(`📋  Ticket #${ticketId} cerrado`)
-                .setDescription(
-                    `> 👤  **Usuario:**    <@${ticket.userId}> (\`${ticket.userTag}\`)\n` +
-                    `> 🗂️  **Categoría:**  ${cat.emoji} \`${cat.label}\`\n` +
-                    `> 🔒  **Cerrado por:** \`${interaction.user.tag}\`\n` +
-                    `> ⏱️  **Duración:**   \`${calcDuracion(ticket.timestamp, Date.now())}\``
-                )
-                .setTimestamp();
-            const buffer   = Buffer.from(transcript, 'utf8');
-            const filename = `transcript-ticket${ticketId}.txt`;
-            await logCanal.send({ embeds: [embedLog], files: [{ attachment: buffer, name: filename }] });
-        }
-    }
+    // Log: ticket cerrado (detallado)
+    const buffer   = Buffer.from(transcript, 'utf8');
+    const filename = `transcript-ticket${ticketId}.txt`;
+    await logTicket(guild, tdata,
+        new EmbedBuilder()
+            .setColor('#ED4245')
+            .setTitle(`📋  Ticket #${ticketId} cerrado`)
+            .setDescription(
+                `> 👤  **Usuario:**    <@${ticket.userId}> (\`${ticket.userTag}\`)\n` +
+                `> 🗂️  **Categoría:**  ${cat.emoji} \`${cat.label}\`\n` +
+                `> 🔒  **Cerrado por:** \`${interaction.user.tag}\`\n` +
+                `> ⏱️  **Duración:**   \`${calcDuracion(ticket.timestamp, Date.now())}\``
+            )
+            .setTimestamp(),
+        { attachment: buffer, name: filename }
+    );
 
     setTimeout(() => { interaction.channel.delete().catch(() => {}); }, 5000);
 }
@@ -661,13 +814,17 @@ async function handleTicketInteraction(interaction) {
             );
             return interaction.showModal(modal);
         }
+        // Para categorías sin modal: defer inmediato para no expirar
+        await interaction.deferReply({ ephemeral: true });
         return abrirTicket(interaction, categoriaKey);
     }
 
     // Modal submit — datos de compra
     if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket_modal_')) {
         const categoriaKey = interaction.customId.replace('ticket_modal_', '');
-        const datosModal   = {
+        // Modals tienen 3 seg antes de expirar — defer inmediato
+        await interaction.deferReply({ ephemeral: true });
+        const datosModal = {
             cantidad: interaction.fields.getTextInputValue('cantidad'),
             precio:   interaction.fields.getTextInputValue('precio'),
             metodo:   interaction.fields.getTextInputValue('metodo')
@@ -725,7 +882,7 @@ client.on('messageCreate', async (message) => {
             desc += `\n\n**📬 Te mencionaron (${menciones.length}):**\n${lista}`;
         }
         const embed = new EmbedBuilder().setColor('#57F287').setDescription(desc).setTimestamp();
-        await message.reply({ embeds: [embed] });
+        await message.reply({ embeds: [embed] }).catch(() => {});
         return;
     }
 
@@ -747,7 +904,7 @@ client.on('messageCreate', async (message) => {
                         `> *Motivo: ${afkInfo.motivo}*\n\n` +
                         `Tu mención fue registrada y la verá al volver.`
                     );
-                await message.reply({ embeds: [embed] });
+                await message.reply({ embeds: [embed] }).catch(() => {});
             }
         }
     }
@@ -756,21 +913,21 @@ client.on('messageCreate', async (message) => {
     if (message.mentions.has(client.user)) {
         const embed = new EmbedBuilder().setColor('#5865F2')
             .setDescription(`### 👋  ¡Hola!\n\n> Usa \`/help\` para ver todos mis comandos.`);
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [embed] }).catch(() => {});
     }
 
     if (!message.content.startsWith(PREFIX)) return;
     const args        = message.content.slice(PREFIX.length).trim().split(/ +/);
     const commandName = args.shift().toLowerCase();
-    if (commandName === 'ping') return message.reply(`🏓 Pong! \`${Math.round(client.ws.ping)}ms\``);
-    if (commandName === 'help') return message.reply({ embeds: [buildHelpEmbed()] });
+    if (commandName === 'ping') return message.reply(`🏓 Pong! \`${Math.round(client.ws.ping)}ms\``).catch(() => {});
+    if (commandName === 'help') return message.reply({ embeds: [buildHelpEmbed()] }).catch(() => {});
     if (commandName === 'afk') {
         const motivo = args.join(' ') || 'Sin motivo';
         data.afk[message.author.id] = { motivo, tiempo: Date.now(), menciones: [] };
         saveData(message.guild.id, data);
         const embed = new EmbedBuilder().setColor('#3498DB')
             .setDescription(`### 💤  AFK activado\n\n> **${message.author.username}** — *${motivo}*`);
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [embed] }).catch(() => {});
     }
 });
 
@@ -784,492 +941,597 @@ client.on('interactionCreate', async (interaction) => {
         (interaction.isStringSelectMenu() && interaction.customId === 'ticket_categoria') ||
         (interaction.isModalSubmit()      && interaction.customId.startsWith('ticket_modal_')) ||
         (interaction.isButton()           && interaction.customId.startsWith('ticket_cerrar_'))
-    ) return handleTicketInteraction(interaction);
+    ) return safeHandle(interaction, () => handleTicketInteraction(interaction));
 
     // ── Botones de cancelar orden ─────────────────────────────────────────
     if (interaction.isButton()) {
         if (interaction.customId.startsWith('cancelar_confirm_')) {
-            const ordenId = parseInt(interaction.customId.split('_')[2]);
-            const data    = loadData(interaction.guild.id);
-            const venta   = data.ventas.find(v => v.id === ordenId);
-            if (!venta || venta.estado === 'cancelada')
-                return interaction.update({ content: '⚠️ Esta orden ya fue procesada.', components: [] });
-            venta.estado = 'cancelada';
-            data.analytics.totalVentas = Math.max(0, data.analytics.totalVentas - 1);
-            data.analytics.totalRobux  = Math.max(0, data.analytics.totalRobux - venta.robux);
-            if (data.analytics.porVendedor[venta.vendedorId]) {
-                data.analytics.porVendedor[venta.vendedorId].ventas--;
-                data.analytics.porVendedor[venta.vendedorId].robux -= venta.robux;
-            }
-            if (data.analytics.porCliente?.[venta.clienteId]) {
-                data.analytics.porCliente[venta.clienteId].compras--;
-                data.analytics.porCliente[venta.clienteId].robux -= venta.robux;
-            }
-            saveData(interaction.guild.id, data);
-            const embed = new EmbedBuilder().setColor('#ED4245')
-                .setTitle('❌  Orden cancelada')
-                .setDescription(
-                    `> 🔖  **Orden:**    \`#${ordenId}\`\n` +
-                    `> 📦  **Producto:** \`${venta.producto}\`\n` +
-                    `> 👤  **Cliente:**  <@${venta.clienteId}>\n` +
-                    `> 🔨  **Por:**      <@${interaction.user.id}>`
-                ).setTimestamp();
-            return interaction.update({ embeds: [embed], components: [] });
+            return safeHandle(interaction, async () => {
+                const ordenId = parseInt(interaction.customId.split('_')[2]);
+                const data    = loadData(interaction.guild.id);
+                const venta   = data.ventas.find(v => v.id === ordenId);
+                if (!venta || venta.estado === 'cancelada')
+                    return interaction.update({ content: '⚠️ Esta orden ya fue procesada.', components: [] });
+                venta.estado = 'cancelada';
+                data.analytics.totalVentas = Math.max(0, data.analytics.totalVentas - 1);
+                data.analytics.totalRobux  = Math.max(0, data.analytics.totalRobux - venta.robux);
+                if (data.analytics.porVendedor[venta.vendedorId]) {
+                    data.analytics.porVendedor[venta.vendedorId].ventas--;
+                    data.analytics.porVendedor[venta.vendedorId].robux -= venta.robux;
+                }
+                if (data.analytics.porCliente?.[venta.clienteId]) {
+                    data.analytics.porCliente[venta.clienteId].compras--;
+                    data.analytics.porCliente[venta.clienteId].robux -= venta.robux;
+                }
+                saveData(interaction.guild.id, data);
+                const embed = new EmbedBuilder().setColor('#ED4245')
+                    .setTitle('❌  Orden cancelada')
+                    .setDescription(
+                        `> 🔖  **Orden:**    \`#${ordenId}\`\n` +
+                        `> 📦  **Producto:** \`${venta.producto}\`\n` +
+                        `> 👤  **Cliente:**  <@${venta.clienteId}>\n` +
+                        `> 🔨  **Por:**      <@${interaction.user.id}>`
+                    ).setTimestamp();
+                return interaction.update({ embeds: [embed], components: [] });
+            });
         }
         if (interaction.customId.startsWith('cancelar_abort_'))
             return interaction.update({ content: '✅ Cancelación abortada.', components: [] });
 
         // Botón reseña
         if (interaction.customId.startsWith('reseña_')) {
-            const ordenId = parseInt(interaction.customId.split('_')[1]);
-            const data    = loadData(interaction.guild.id);
-            const venta   = data.ventas.find(v => v.id === ordenId);
-            if (!venta || interaction.user.id !== venta.clienteId)
-                return interaction.reply({ content: '⚠️ Solo el cliente de esta orden puede dejar reseña.', ephemeral: true });
-            if (data.resenas.find(r => r.ordenId === ordenId))
-                return interaction.reply({ content: '⚠️ Ya dejaste una reseña para esta orden.', ephemeral: true });
-            const modal = new ModalBuilder().setCustomId(`modal_resena_${ordenId}`).setTitle(`Reseña — Orden #${ordenId}`);
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('estrellas').setLabel('Calificación (1 a 5)').setPlaceholder('Número del 1 al 5').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1)
-                ),
-                new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('comentario').setLabel('Comentario (opcional)').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(300)
-                )
-            );
-            return interaction.showModal(modal);
+            return safeHandle(interaction, async () => {
+                const ordenId = parseInt(interaction.customId.split('_')[1]);
+                const data    = loadData(interaction.guild.id);
+                const venta   = data.ventas.find(v => v.id === ordenId);
+                if (!venta || interaction.user.id !== venta.clienteId)
+                    return interaction.reply({ content: '⚠️ Solo el cliente de esta orden puede dejar reseña.', ephemeral: true });
+                if (data.resenas.find(r => r.ordenId === ordenId))
+                    return interaction.reply({ content: '⚠️ Ya dejaste una reseña para esta orden.', ephemeral: true });
+                const modal = new ModalBuilder().setCustomId(`modal_resena_${ordenId}`).setTitle(`Reseña — Orden #${ordenId}`);
+                modal.addComponents(
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder().setCustomId('estrellas').setLabel('Calificación (1 a 5)').setPlaceholder('Número del 1 al 5').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1)
+                    ),
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder().setCustomId('comentario').setLabel('Comentario (opcional)').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(300)
+                    )
+                );
+                return interaction.showModal(modal);
+            });
         }
     }
 
     // ── Modales ───────────────────────────────────────────────────────────
     if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_resena_')) {
-        const ordenId      = parseInt(interaction.customId.split('_')[2]);
-        const data         = loadData(interaction.guild.id);
-        const venta        = data.ventas.find(v => v.id === ordenId);
-        const numEstrellas = parseInt(interaction.fields.getTextInputValue('estrellas'));
-        const comentario   = interaction.fields.getTextInputValue('comentario') || null;
-        if (isNaN(numEstrellas) || numEstrellas < 1 || numEstrellas > 5)
-            return interaction.reply({ content: '⚠️ La calificación debe ser un número del 1 al 5.', ephemeral: true });
-        data.resenas.push({ ordenId, clienteId: venta.clienteId, clienteTag: venta.clienteTag, vendedorId: venta.vendedorId, estrellas: numEstrellas, comentario, timestamp: Date.now() });
-        saveData(interaction.guild.id, data);
-        const embedResena = new EmbedBuilder().setColor('#FEE75C')
-            .setTitle(`${estrellas(numEstrellas)}  Reseña — Orden \`#${ordenId}\``)
-            .setDescription(
-                `> 👤  **Cliente:**  <@${venta.clienteId}>\n` +
-                `> 🤝  **Operador:** <@${venta.vendedorId}>\n` +
-                (comentario ? `\n> 💬  *"${comentario}"*` : '')
-            ).setTimestamp();
-        await interaction.reply({ embeds: [embedResena] });
-        if (data.config.resenaChannelId) {
-            const canal = interaction.guild.channels.cache.get(data.config.resenaChannelId);
-            if (canal) await canal.send({ embeds: [embedResena] });
-        }
-        return;
+        return safeHandle(interaction, async () => {
+            const ordenId      = parseInt(interaction.customId.split('_')[2]);
+            const data         = loadData(interaction.guild.id);
+            const venta        = data.ventas.find(v => v.id === ordenId);
+            const numEstrellas = parseInt(interaction.fields.getTextInputValue('estrellas'));
+            const comentario   = interaction.fields.getTextInputValue('comentario') || null;
+            if (isNaN(numEstrellas) || numEstrellas < 1 || numEstrellas > 5)
+                return interaction.reply({ content: '⚠️ La calificación debe ser un número del 1 al 5.', ephemeral: true });
+            data.resenas.push({ ordenId, clienteId: venta.clienteId, clienteTag: venta.clienteTag, vendedorId: venta.vendedorId, estrellas: numEstrellas, comentario, timestamp: Date.now() });
+            saveData(interaction.guild.id, data);
+            const embedResena = new EmbedBuilder().setColor('#FEE75C')
+                .setTitle(`${estrellas(numEstrellas)}  Reseña — Orden \`#${ordenId}\``)
+                .setDescription(
+                    `> 👤  **Cliente:**  <@${venta.clienteId}>\n` +
+                    `> 🤝  **Operador:** <@${venta.vendedorId}>\n` +
+                    (comentario ? `\n> 💬  *"${comentario}"*` : '')
+                ).setTimestamp();
+            await interaction.reply({ embeds: [embedResena] });
+            if (data.config.resenaChannelId) {
+                const canal = interaction.guild.channels.cache.get(data.config.resenaChannelId);
+                if (canal) await canal.send({ embeds: [embedResena] });
+            }
+        });
     }
 
     if (!interaction.isChatInputCommand()) return;
 
-    const data  = loadData(interaction.guild.id);
-    const guild = interaction.guild;
-    const user  = interaction.user;
+    // Envolver todos los slash commands con safeHandle
+    safeHandle(interaction, async () => {
+        const data  = loadData(interaction.guild.id);
+        const guild = interaction.guild;
+        const user  = interaction.user;
 
-    if (interaction.commandName === 'help')
-        return interaction.reply({ embeds: [buildHelpEmbed()], ephemeral: true });
+        if (interaction.commandName === 'help')
+            return interaction.reply({ embeds: [buildHelpEmbed()], ephemeral: true });
 
-    if (interaction.commandName === 'ping')
-        return interaction.reply(`🏓 Pong! \`${Math.round(client.ws.ping)}ms\``);
+        if (interaction.commandName === 'ping')
+            return interaction.reply(`🏓 Pong! \`${Math.round(client.ws.ping)}ms\``);
 
-    if (interaction.commandName === 'ticket-setup')
-        return handleTicketSetup(interaction);
+        if (interaction.commandName === 'ticket-setup')
+            return handleTicketSetup(interaction);
 
-    // /vender
-    if (interaction.commandName === 'vender') {
-        const espera = checkCooldown(guild.id, user.id, 'vender', 10);
-        if (espera > 0) return interaction.reply({ content: `⏳ Espera **${espera}s**.`, ephemeral: true });
-        const producto = interaction.options.getString('producto');
-        const clienteU = interaction.options.getUser('cliente');
-        const vendedor = interaction.options.getUser('vendedor');
-        const cantidad = interaction.options.getString('cantidad');
-        const precio   = interaction.options.getString('precio');
-        const metodo   = interaction.options.getString('metodo') ?? 'No especificado';
-        const robux    = parseRobux(cantidad);
-        if (!robux) return interaction.reply({ content: '⚠️ Cantidad inválida. Usa: `1000`, `1k`, `2.5k`.', ephemeral: true });
-        const numeroOrden = data.ventas.length + 1;
-        const venta = { id: numeroOrden, producto, clienteId: clienteU.id, clienteTag: clienteU.tag, vendedorId: vendedor.id, vendedorTag: vendedor.tag, robux, precio: precio ?? 'No especificado', metodo, timestamp: Date.now(), estado: 'completada' };
-        data.ventas.push(venta);
-        data.analytics.totalVentas++;
-        data.analytics.totalRobux += robux;
-        if (!data.analytics.porVendedor[vendedor.id]) data.analytics.porVendedor[vendedor.id] = { ventas: 0, robux: 0, tag: vendedor.tag };
-        data.analytics.porVendedor[vendedor.id].ventas++;
-        data.analytics.porVendedor[vendedor.id].robux += robux;
-        if (!data.analytics.porCliente) data.analytics.porCliente = {};
-        if (!data.analytics.porCliente[clienteU.id]) data.analytics.porCliente[clienteU.id] = { compras: 0, robux: 0, tag: clienteU.tag };
-        data.analytics.porCliente[clienteU.id].compras++;
-        data.analytics.porCliente[clienteU.id].robux += robux;
-        saveData(guild.id, data);
-        const rowResena = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`reseña_${numeroOrden}`).setLabel('⭐ Dejar reseña').setStyle(ButtonStyle.Secondary)
-        );
-        await interaction.reply({ embeds: [buildVentaPublicaEmbed(venta, numeroOrden)], components: [rowResena] });
-        if (data.config.dmEnabled) {
-            try { await clienteU.send({ embeds: [buildDMEmbed(venta, numeroOrden, guild.name)] }); }
-            catch { console.warn(`No se pudo enviar DM a ${clienteU.tag}`); }
+        // ── /settiers ─────────────────────────────────────────────────────
+        if (interaction.commandName === 'settiers') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
+
+            const rolBronce = interaction.options.getRole('bronce');
+            const rolPlata  = interaction.options.getRole('plata');
+            const rolOro    = interaction.options.getRole('oro');
+            const rolVip    = interaction.options.getRole('vip');
+
+            if (!data.config.tierRoles) data.config.tierRoles = {};
+            if (rolBronce) data.config.tierRoles.bronce = rolBronce.id;
+            if (rolPlata)  data.config.tierRoles.plata  = rolPlata.id;
+            if (rolOro)    data.config.tierRoles.oro    = rolOro.id;
+            if (rolVip)    data.config.tierRoles.vip    = rolVip.id;
+            saveData(guild.id, data);
+
+            const embed = new EmbedBuilder()
+                .setColor('#FEE75C')
+                .setTitle('🎖️  Tiers configurados')
+                .setDescription(
+                    `> 🥉  **Bronce** (1+ compra):   ${rolBronce ? `<@&${rolBronce.id}>` : data.config.tierRoles.bronce ? `<@&${data.config.tierRoles.bronce}>` : '`No configurado`'}\n` +
+                    `> 🥈  **Plata**  (5+ compras):  ${rolPlata  ? `<@&${rolPlata.id}>`  : data.config.tierRoles.plata  ? `<@&${data.config.tierRoles.plata}>` : '`No configurado`'}\n` +
+                    `> 🥇  **Oro**    (10+ compras): ${rolOro    ? `<@&${rolOro.id}>`    : data.config.tierRoles.oro    ? `<@&${data.config.tierRoles.oro}>` : '`No configurado`'}\n` +
+                    `> 💎  **VIP**    (20+ compras): ${rolVip    ? `<@&${rolVip.id}>`    : data.config.tierRoles.vip    ? `<@&${data.config.tierRoles.vip}>` : '`No configurado`'}`
+                )
+                .setFooter({ text: 'Los roles se asignan automáticamente al registrar una venta.' })
+                .setTimestamp();
+            return interaction.reply({ embeds: [embed], ephemeral: true });
         }
-        if (data.config.logChannelId) {
-            const logChannel = guild.channels.cache.get(data.config.logChannelId);
-            if (logChannel) await logChannel.send({ embeds: [buildLogEmbed(venta, numeroOrden)] });
-        }
-        if (data.analytics.totalVentas % 10 === 0) {
-            const embedHito = new EmbedBuilder().setColor('#FEE75C')
-                .setTitle('🏆  ¡Nuevo hito alcanzado!')
-                .setDescription(`> **${guild.name}** alcanzó **${data.analytics.totalVentas}** pedidos.\n> 💎 Total: \`${formatRobux(data.analytics.totalRobux)}\``);
-            await interaction.followUp({ embeds: [embedHito] });
-        }
-        return;
-    }
 
-    // /orden
-    if (interaction.commandName === 'orden') {
-        const ordenId = interaction.options.getInteger('id');
-        const venta   = data.ventas.find(v => v.id === ordenId);
-        if (!venta) return interaction.reply({ content: `⚠️ No existe la orden \`#${ordenId}\`.`, ephemeral: true });
-        const resena = data.resenas?.find(r => r.ordenId === ordenId);
-        const embed  = new EmbedBuilder().setColor(venta.estado === 'cancelada' ? '#ED4245' : '#5865F2')
-            .setTitle(`${venta.estado === 'cancelada' ? '❌' : '✅'}  Orden \`#${venta.id}\``)
-            .setDescription(
-                `> 📦  **Producto:** \`${venta.producto}\`\n` +
-                `> 💎  **Cantidad:** \`${formatRobux(venta.robux)}\`\n` +
-                `> 💵  **Precio:**   \`${venta.precio}\`\n` +
-                `> 💳  **Método:**   \`${venta.metodo}\`\n` +
-                `> ━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `> 👤  **Cliente:**  <@${venta.clienteId}>\n` +
-                `> 🤝  **Operador:** <@${venta.vendedorId}>\n\n` +
-                `**⭐ Reseña:** ${resena ? `${estrellas(resena.estrellas)}${resena.comentario ? ` *"${resena.comentario}"*` : ''}` : '*Sin reseña aún*'}`
-            )
-            .setFooter({ text: `Estado: ${venta.estado}` }).setTimestamp(venta.timestamp);
-        return interaction.reply({ embeds: [embed], ephemeral: true });
-    }
+        // ── /vender ───────────────────────────────────────────────────────
+        if (interaction.commandName === 'vender') {
+            const espera = checkCooldown(guild.id, user.id, 'vender', 10);
+            if (espera > 0) return interaction.reply({ content: `⏳ Espera **${espera}s**.`, ephemeral: true });
+            const producto = interaction.options.getString('producto');
+            const clienteU = interaction.options.getUser('cliente');
+            const vendedor = interaction.options.getUser('vendedor');
+            const cantidad = interaction.options.getString('cantidad');
+            const precio   = interaction.options.getString('precio');
+            const metodo   = interaction.options.getString('metodo') ?? 'No especificado';
+            const robux    = parseRobux(cantidad);
+            if (!robux) return interaction.reply({ content: '⚠️ Cantidad inválida. Usa: `1000`, `1k`, `2.5k`.', ephemeral: true });
+            const numeroOrden = data.ventas.length + 1;
+            const venta = { id: numeroOrden, producto, clienteId: clienteU.id, clienteTag: clienteU.tag, vendedorId: vendedor.id, vendedorTag: vendedor.tag, robux, precio: precio ?? 'No especificado', metodo, timestamp: Date.now(), estado: 'completada' };
+            data.ventas.push(venta);
+            data.analytics.totalVentas++;
+            data.analytics.totalRobux += robux;
+            if (!data.analytics.porVendedor[vendedor.id]) data.analytics.porVendedor[vendedor.id] = { ventas: 0, robux: 0, tag: vendedor.tag };
+            data.analytics.porVendedor[vendedor.id].ventas++;
+            data.analytics.porVendedor[vendedor.id].robux += robux;
+            if (!data.analytics.porCliente) data.analytics.porCliente = {};
+            if (!data.analytics.porCliente[clienteU.id]) data.analytics.porCliente[clienteU.id] = { compras: 0, robux: 0, tag: clienteU.tag };
+            data.analytics.porCliente[clienteU.id].compras++;
+            data.analytics.porCliente[clienteU.id].robux += robux;
+            saveData(guild.id, data);
 
-    // /buscar
-    if (interaction.commandName === 'buscar') {
-        const objetivo = interaction.options.getUser('cliente');
-        const ventas   = data.ventas.filter(v => v.clienteId === objetivo.id && v.estado !== 'cancelada');
-        if (ventas.length === 0) return interaction.reply({ content: `📭 **${objetivo.username}** no tiene pedidos.`, ephemeral: true });
-        const ultimas    = ventas.slice(-8).reverse();
-        const lineas     = ultimas.map(v => `> \`#${v.id}\` **${v.producto}** — \`${formatRobux(v.robux)}\` — <t:${Math.floor(v.timestamp / 1000)}:d>`).join('\n');
-        const totalRobux = ventas.reduce((s, v) => s + v.robux, 0);
-        const resenas    = data.resenas?.filter(r => r.clienteId === objetivo.id) ?? [];
-        const promedio   = resenas.length > 0 ? (resenas.reduce((s, r) => s + r.estrellas, 0) / resenas.length).toFixed(1) : null;
-        const embed = new EmbedBuilder().setColor('#5865F2')
-            .setTitle(`👤  Historial de ${objetivo.username}`)
-            .setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
-            .setDescription(
-                `> 🛒  **Pedidos:** \`${ventas.length}\`\n` +
-                `> 💎  **R$ gastados:** \`${formatRobux(totalRobux)}\`\n` +
-                (promedio ? `> ⭐  **Promedio:** \`${promedio}/5\`\n` : '') +
-                `\n**Últimos pedidos:**\n${lineas}`
-            )
-            .setFooter({ text: `Mostrando ${ultimas.length} de ${ventas.length}` }).setTimestamp();
-        return interaction.reply({ embeds: [embed], ephemeral: true });
-    }
+            // Asignar tier automáticamente
+            await actualizarTier(guild, clienteU.id, data.analytics.porCliente[clienteU.id].compras, data.config.tierRoles);
 
-    // /historial
-    if (interaction.commandName === 'historial') {
-        const rango   = interaction.options.getString('rango') ?? 'todo';
-        const filtroU = interaction.options.getUser('usuario');
-        let ventas = rango === 'todo' ? data.ventas : ventasPorRango(data.ventas, rango);
-        if (filtroU) ventas = ventas.filter(v => v.clienteId === filtroU.id || v.vendedorId === filtroU.id);
-        if (ventas.length === 0) return interaction.reply({ content: '📭 No hay pedidos con ese filtro.', ephemeral: true });
-        const ultimas = ventas.slice(-10).reverse();
-        const lineas  = ultimas.map(v => {
-            const t = v.estado === 'cancelada' ? '~~' : '';
-            return `> \`#${v.id}\` ${t}**${v.producto}**${t} — \`${formatRobux(v.robux)}\` — <@${v.clienteId}>`;
-        }).join('\n');
-        const embed = new EmbedBuilder().setColor('#5865F2')
-            .setTitle(`📜  Historial — ${guild.name}`)
-            .setDescription(
-                `${lineas}\n\n` +
-                `> 🧾  **Total:** \`${ventas.length}\`\n` +
-                `> 💎  **R$ movidos:** \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\``
-            )
-            .setFooter({ text: `Últimos ${ultimas.length} de ${ventas.length}` }).setTimestamp();
-        return interaction.reply({ embeds: [embed], ephemeral: true });
-    }
-
-    // /reseña
-    if (interaction.commandName === 'reseña') {
-        const ordenId = interaction.options.getInteger('orden');
-        const venta   = data.ventas.find(v => v.id === ordenId);
-        if (!venta) return interaction.reply({ content: `⚠️ No existe la orden \`#${ordenId}\`.`, ephemeral: true });
-        if (venta.clienteId !== user.id) return interaction.reply({ content: '⚠️ Solo el cliente puede dejar reseña.', ephemeral: true });
-        if (data.resenas?.find(r => r.ordenId === ordenId)) return interaction.reply({ content: '⚠️ Ya dejaste una reseña para esta orden.', ephemeral: true });
-        const modal = new ModalBuilder().setCustomId(`modal_resena_${ordenId}`).setTitle(`Reseña — Orden #${ordenId}`);
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('estrellas').setLabel('Calificación (1 a 5)').setPlaceholder('Número del 1 al 5').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('comentario').setLabel('Comentario (opcional)').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(300))
-        );
-        return interaction.showModal(modal);
-    }
-
-    // /resenas
-    if (interaction.commandName === 'resenas') {
-        const objetivo = interaction.options.getUser('vendedor');
-        const resenas  = data.resenas?.filter(r => r.vendedorId === objetivo.id) ?? [];
-        if (resenas.length === 0) return interaction.reply({ content: `📭 **${objetivo.username}** no tiene reseñas.`, ephemeral: true });
-        const promedio = (resenas.reduce((s, r) => s + r.estrellas, 0) / resenas.length).toFixed(1);
-        const ultimas  = resenas.slice(-5).reverse();
-        const lineas   = ultimas.map(r => `> ${estrellas(r.estrellas)} <@${r.clienteId}>` + (r.comentario ? ` — *"${r.comentario}"*` : '')).join('\n');
-        const embed = new EmbedBuilder().setColor('#FEE75C')
-            .setTitle(`⭐  Reseñas de ${objetivo.username}`)
-            .setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
-            .setDescription(`> **Promedio:** \`${promedio}/5\` *(${resenas.length} reseña${resenas.length !== 1 ? 's' : ''})*\n\n${lineas}`)
-            .setFooter({ text: `Últimas ${ultimas.length} de ${resenas.length}` }).setTimestamp();
-        return interaction.reply({ embeds: [embed] });
-    }
-
-    // /cancelar
-    if (interaction.commandName === 'cancelar') {
-        if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
-            return interaction.reply({ content: '🚫 Necesitas permiso de **Gestionar mensajes**.', ephemeral: true });
-        const ordenId = interaction.options.getInteger('orden');
-        const venta   = data.ventas.find(v => v.id === ordenId);
-        if (!venta) return interaction.reply({ content: `⚠️ No existe la orden \`#${ordenId}\`.`, ephemeral: true });
-        if (venta.estado === 'cancelada') return interaction.reply({ content: `⚠️ Ya está cancelada.`, ephemeral: true });
-        const embed = new EmbedBuilder().setColor('#ED4245')
-            .setTitle(`⚠️  ¿Cancelar orden \`#${ordenId}\`?`)
-            .setDescription(
-                `> 📦  **Producto:** \`${venta.producto}\`\n` +
-                `> 👤  **Cliente:**  <@${venta.clienteId}>\n` +
-                `> 💎  **Cantidad:** \`${formatRobux(venta.robux)}\`\n\n` +
-                `*Esta acción **no se puede deshacer**.*`
+            const rowResena = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`reseña_${numeroOrden}`).setLabel('⭐ Dejar reseña').setStyle(ButtonStyle.Secondary)
             );
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`cancelar_confirm_${ordenId}`).setLabel('Sí, cancelar').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId(`cancelar_abort_${ordenId}`).setLabel('No, mantener').setStyle(ButtonStyle.Secondary)
-        );
-        return interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
-    }
-
-    // /exportar
-    if (interaction.commandName === 'exportar') {
-        if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
-            return interaction.reply({ content: '🚫 Necesitas permiso de **Gestionar mensajes**.', ephemeral: true });
-        const rango  = interaction.options.getString('rango') ?? 'mes';
-        const ventas = ventasPorRango(data.ventas, rango).filter(v => v.estado !== 'cancelada');
-        if (ventas.length === 0) return interaction.reply({ content: '📭 No hay pedidos en ese período.', ephemeral: true });
-        const etiquetas  = { hoy: 'Hoy', semana: 'Esta semana', mes: 'Este mes' };
-        const totalRobux = ventas.reduce((s, v) => s + v.robux, 0);
-        let texto = `REPORTE — ${etiquetas[rango] ?? rango}\nServidor: ${guild.name}\nGenerado: ${new Date().toLocaleString('es-MX')}\n${'─'.repeat(60)}\n\n`;
-        ventas.forEach(v => { texto += `#${v.id} | ${v.producto} | ${formatRobux(v.robux)} | ${v.precio} | ${v.metodo} | Cliente: ${v.clienteTag} | Operador: ${v.vendedorTag}\n`; });
-        texto += `\n${'─'.repeat(60)}\nTOTAL: ${ventas.length} pedidos | ${formatRobux(totalRobux)}\n`;
-        return interaction.reply({ content: `📁 **${ventas.length}** pedidos exportados:`, files: [{ attachment: Buffer.from(texto, 'utf8'), name: `pedidos-${rango}.txt` }], ephemeral: true });
-    }
-
-    // /perfil
-    if (interaction.commandName === 'perfil') {
-        const objetivo     = interaction.options.getUser('usuario');
-        const comoVendedor = data.ventas.filter(v => v.vendedorId === objetivo.id && v.estado !== 'cancelada');
-        const comoCliente  = data.ventas.filter(v => v.clienteId  === objetivo.id && v.estado !== 'cancelada');
-        const resenas      = data.resenas?.filter(r => r.vendedorId === objetivo.id) ?? [];
-        const promedio     = resenas.length > 0 ? `${(resenas.reduce((s, r) => s + r.estrellas, 0) / resenas.length).toFixed(1)}/5` : 'Sin reseñas';
-        const embed = new EmbedBuilder().setColor('#5865F2')
-            .setTitle(`👤  ${objetivo.username}`)
-            .setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
-            .setDescription(
-                `**Como operador**\n` +
-                `> 🧾  **Pedidos:**    \`${comoVendedor.length}\`\n` +
-                `> 💎  **R$ movidos:** \`${formatRobux(comoVendedor.reduce((s, v) => s + v.robux, 0))}\`\n` +
-                `> ⭐  **Valoración:** \`${promedio}\`\n\n` +
-                `**Como cliente**\n` +
-                `> 🛒  **Compras:**    \`${comoCliente.length}\`\n` +
-                `> 💎  **R$ gastados:** \`${formatRobux(comoCliente.reduce((s, v) => s + v.robux, 0))}\``
-            )
-            .setFooter({ text: guild.name }).setTimestamp();
-        return interaction.reply({ embeds: [embed], ephemeral: true });
-    }
-
-    // /stats
-    if (interaction.commandName === 'stats') {
-        const rango  = interaction.options.getString('rango') ?? 'hoy';
-        const ventas = ventasPorRango(data.ventas, rango).filter(v => v.estado !== 'cancelada');
-        const robux  = ventas.reduce((s, v) => s + v.robux, 0);
-        const etiquetas = { hoy: 'Hoy', semana: 'Esta semana', mes: 'Este mes' };
-        const embed = new EmbedBuilder().setColor('#FEE75C')
-            .setTitle(`📊  Stats — ${etiquetas[rango] ?? rango}`)
-            .setDescription(
-                `> 🧾  **Pedidos:**         \`${ventas.length}\`\n` +
-                `> 💎  **R$ movidos:**      \`${formatRobux(robux)}\`\n` +
-                `> 👥  **Clientes únicos:** \`${new Set(ventas.map(v => v.clienteId)).size}\`\n\n` +
-                `> 📦  **Total histórico:** \`${data.ventas.filter(v => v.estado !== 'cancelada').length}\`\n` +
-                `> 💰  **Total R$ hist.:**  \`${formatRobux(data.analytics.totalRobux)}\``
-            )
-            .setFooter({ text: guild.name }).setTimestamp();
-        return interaction.reply({ embeds: [embed], ephemeral: true });
-    }
-
-    // /top
-    if (interaction.commandName === 'top') {
-        const tipo     = interaction.options.getString('tipo') ?? 'vendedores';
-        const por      = interaction.options.getString('por')  ?? 'ventas';
-        const medallas = ['🥇', '🥈', '🥉'];
-        if (tipo === 'compradores') {
-            const compradores = Object.entries(data.analytics.porCliente ?? {}).map(([id, d]) => ({ id, ...d })).filter(c => c.compras > 0).sort((a, b) => por === 'robux' ? b.robux - a.robux : b.compras - a.compras).slice(0, 10);
-            if (compradores.length === 0) return interaction.reply({ content: '📭 Sin compras aún.', ephemeral: true });
-            const lineas = compradores.map((c, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${c.id}> — \`${c.compras}\` compra(s) • \`${formatRobux(c.robux)}\``).join('\n');
-            return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle('👑  Top compradores').setDescription(lineas).setTimestamp()] });
+            await interaction.reply({ embeds: [buildVentaPublicaEmbed(venta, numeroOrden)], components: [rowResena] });
+            if (data.config.dmEnabled) {
+                try { await clienteU.send({ embeds: [buildDMEmbed(venta, numeroOrden, guild.name)] }); }
+                catch { console.warn(`⚠️ No se pudo enviar DM a ${clienteU.tag}`); }
+            }
+            if (data.config.logChannelId) {
+                const logChannel = guild.channels.cache.get(data.config.logChannelId);
+                if (logChannel) await logChannel.send({ embeds: [buildLogEmbed(venta, numeroOrden)] });
+            }
+            if (data.analytics.totalVentas % 10 === 0) {
+                const embedHito = new EmbedBuilder().setColor('#FEE75C')
+                    .setTitle('🏆  ¡Nuevo hito alcanzado!')
+                    .setDescription(`> **${guild.name}** alcanzó **${data.analytics.totalVentas}** pedidos.\n> 💎 Total: \`${formatRobux(data.analytics.totalRobux)}\``);
+                await interaction.followUp({ embeds: [embedHito] });
+            }
+            return;
         }
-        const vendedores = Object.entries(data.analytics.porVendedor).map(([id, d]) => ({ id, ...d })).filter(v => v.ventas > 0).sort((a, b) => por === 'robux' ? b.robux - a.robux : b.ventas - a.ventas).slice(0, 10);
-        if (vendedores.length === 0) return interaction.reply({ content: '📭 Sin pedidos aún.', ephemeral: true });
-        const lineas = vendedores.map((v, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${v.id}> — \`${v.ventas}\` pedido(s) • \`${formatRobux(v.robux)}\``).join('\n');
-        return interaction.reply({ embeds: [new EmbedBuilder().setColor('#57F287').setTitle('🏆  Top operadores').setDescription(lineas).setTimestamp()] });
-    }
 
-    // /dashboard
-    if (interaction.commandName === 'dashboard') {
-        const hoy    = ventasPorRango(data.ventas, 'hoy').filter(v => v.estado !== 'cancelada');
-        const semana = ventasPorRango(data.ventas, 'semana').filter(v => v.estado !== 'cancelada');
-        const mes    = ventasPorRango(data.ventas, 'mes').filter(v => v.estado !== 'cancelada');
-        const topV   = Object.entries(data.analytics.porVendedor).sort((a, b) => b[1].ventas - a[1].ventas)[0];
-        const topC   = data.analytics.porCliente ? Object.entries(data.analytics.porCliente).sort((a, b) => b[1].compras - a[1].compras)[0] : null;
-        const totalR = data.resenas?.length ?? 0;
-        const prom   = totalR > 0 ? (data.resenas.reduce((s, r) => s + r.estrellas, 0) / totalR).toFixed(1) : null;
-        const embed  = new EmbedBuilder().setColor('#5865F2')
-            .setTitle(`📈  Dashboard — ${guild.name}`)
-            .setThumbnail(guild.iconURL({ dynamic: true }) ?? null)
-            .setDescription(
-                `> 🌅  **Hoy:**         \`${hoy.length}\` pedidos • \`${formatRobux(hoy.reduce((s, v) => s + v.robux, 0))}\`\n` +
-                `> 📅  **Esta semana:** \`${semana.length}\` pedidos • \`${formatRobux(semana.reduce((s, v) => s + v.robux, 0))}\`\n` +
-                `> 🗓️  **Este mes:**    \`${mes.length}\` pedidos • \`${formatRobux(mes.reduce((s, v) => s + v.robux, 0))}\`\n` +
-                `> 📦  **Histórico:**   \`${data.analytics.totalVentas}\` pedidos • \`${formatRobux(data.analytics.totalRobux)}\`\n\n` +
-                `> 🏆  **Top operador:** ${topV ? `<@${topV[0]}> (\`${topV[1].ventas}\` pedidos)` : '`Sin datos`'}\n` +
-                `> 👑  **Top cliente:**  ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}\n` +
-                (prom ? `> ⭐  **Valoración:**  \`${prom}/5\` *(${totalR} reseñas)*` : '')
-            )
-            .setFooter({ text: 'Aurex' }).setTimestamp();
-        return interaction.reply({ embeds: [embed] });
-    }
+        // ── /orden ────────────────────────────────────────────────────────
+        if (interaction.commandName === 'orden') {
+            const ordenId = interaction.options.getInteger('id');
+            const venta   = data.ventas.find(v => v.id === ordenId);
+            if (!venta) return interaction.reply({ content: `⚠️ No existe la orden \`#${ordenId}\`.`, ephemeral: true });
+            const resena = data.resenas?.find(r => r.ordenId === ordenId);
+            const embed  = new EmbedBuilder().setColor(venta.estado === 'cancelada' ? '#ED4245' : '#5865F2')
+                .setTitle(`${venta.estado === 'cancelada' ? '❌' : '✅'}  Orden \`#${venta.id}\``)
+                .setDescription(
+                    `> 📦  **Producto:** \`${venta.producto}\`\n` +
+                    `> 💎  **Cantidad:** \`${formatRobux(venta.robux)}\`\n` +
+                    `> 💵  **Precio:**   \`${venta.precio}\`\n` +
+                    `> 💳  **Método:**   \`${venta.metodo}\`\n` +
+                    `> ━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `> 👤  **Cliente:**  <@${venta.clienteId}>\n` +
+                    `> 🤝  **Operador:** <@${venta.vendedorId}>\n\n` +
+                    `**⭐ Reseña:** ${resena ? `${estrellas(resena.estrellas)}${resena.comentario ? ` *"${resena.comentario}"*` : ''}` : '*Sin reseña aún*'}`
+                )
+                .setFooter({ text: `Estado: ${venta.estado}` }).setTimestamp(venta.timestamp);
+            return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
 
-    // /afk
-    if (interaction.commandName === 'afk') {
-        const motivo = interaction.options.getString('motivo') ?? 'Sin motivo';
-        data.afk[user.id] = { motivo, tiempo: Date.now(), menciones: [] };
-        saveData(guild.id, data);
-        return interaction.reply({ embeds: [new EmbedBuilder().setColor('#3498DB').setDescription(`### 💤  AFK activado\n\n> **${user.username}** — *${motivo}*`)] });
-    }
+        // ── /buscar ───────────────────────────────────────────────────────
+        if (interaction.commandName === 'buscar') {
+            const objetivo = interaction.options.getUser('cliente');
+            const ventas   = data.ventas.filter(v => v.clienteId === objetivo.id && v.estado !== 'cancelada');
+            if (ventas.length === 0) return interaction.reply({ content: `📭 **${objetivo.username}** no tiene pedidos.`, ephemeral: true });
+            const ultimas    = ventas.slice(-8).reverse();
+            const lineas     = ultimas.map(v => `> \`#${v.id}\` **${v.producto}** — \`${formatRobux(v.robux)}\` — <t:${Math.floor(v.timestamp / 1000)}:d>`).join('\n');
+            const totalRobux = ventas.reduce((s, v) => s + v.robux, 0);
+            const resenas    = data.resenas?.filter(r => r.clienteId === objetivo.id) ?? [];
+            const promedio   = resenas.length > 0 ? (resenas.reduce((s, r) => s + r.estrellas, 0) / resenas.length).toFixed(1) : null;
+            const embed = new EmbedBuilder().setColor('#5865F2')
+                .setTitle(`👤  Historial de ${objetivo.username}`)
+                .setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
+                .setDescription(
+                    `> 🛒  **Pedidos:** \`${ventas.length}\`\n` +
+                    `> 💎  **R$ gastados:** \`${formatRobux(totalRobux)}\`\n` +
+                    (promedio ? `> ⭐  **Promedio:** \`${promedio}/5\`\n` : '') +
+                    `\n**Últimos pedidos:**\n${lineas}`
+                )
+                .setFooter({ text: `Mostrando ${ultimas.length} de ${ventas.length}` }).setTimestamp();
+            return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
 
-    // /anuncio
-    if (interaction.commandName === 'anuncio') {
-        if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
-            return interaction.reply({ content: '🚫 Necesitas permiso de **Gestionar mensajes**.', ephemeral: true });
-        const titulo      = interaction.options.getString('titulo');
-        const cuerpo      = interaction.options.getString('mensaje');
-        const textoBoton  = interaction.options.getString('texto_boton');
-        const enlaceBoton = interaction.options.getString('enlace_boton');
-        const embed = new EmbedBuilder().setColor('#ED4245').setTitle(`📢  ${titulo}`).setDescription(cuerpo).setFooter({ text: `Anuncio por ${user.tag} · Aurex` }).setTimestamp();
-        const opts = { embeds: [embed] };
-        if (textoBoton && enlaceBoton) opts.components = [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(textoBoton).setURL(enlaceBoton).setStyle(ButtonStyle.Link))];
-        await interaction.reply({ content: '✅ Anuncio enviado.', ephemeral: true });
-        return interaction.channel.send(opts);
-    }
+        // ── /historial ────────────────────────────────────────────────────
+        if (interaction.commandName === 'historial') {
+            const rango   = interaction.options.getString('rango') ?? 'todo';
+            const filtroU = interaction.options.getUser('usuario');
+            let ventas = rango === 'todo' ? data.ventas : ventasPorRango(data.ventas, rango);
+            if (filtroU) ventas = ventas.filter(v => v.clienteId === filtroU.id || v.vendedorId === filtroU.id);
+            if (ventas.length === 0) return interaction.reply({ content: '📭 No hay pedidos con ese filtro.', ephemeral: true });
+            const ultimas = ventas.slice(-10).reverse();
+            const lineas  = ultimas.map(v => {
+                const t = v.estado === 'cancelada' ? '~~' : '';
+                return `> \`#${v.id}\` ${t}**${v.producto}**${t} — \`${formatRobux(v.robux)}\` — <@${v.clienteId}>`;
+            }).join('\n');
+            const embed = new EmbedBuilder().setColor('#5865F2')
+                .setTitle(`📜  Historial — ${guild.name}`)
+                .setDescription(
+                    `${lineas}\n\n` +
+                    `> 🧾  **Total:** \`${ventas.length}\`\n` +
+                    `> 💎  **R$ movidos:** \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\``
+                )
+                .setFooter({ text: `Últimos ${ultimas.length} de ${ventas.length}` }).setTimestamp();
+            return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
 
-    // /clear
-    if (interaction.commandName === 'clear') {
-        if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
-            return interaction.reply({ content: '🚫 Necesitas permiso de **Gestionar mensajes**.', ephemeral: true });
-        const cantidad = interaction.options.getInteger('cantidad');
-        if (cantidad < 1 || cantidad > 100) return interaction.reply({ content: '⚠️ Entre 1 y 100.', ephemeral: true });
-        const deleted = await interaction.channel.bulkDelete(cantidad, true).catch(() => null);
-        return interaction.reply({ content: `🗑️ **${deleted?.size ?? 0}** mensaje(s) eliminados.`, ephemeral: true });
-    }
+        // ── /reseña ───────────────────────────────────────────────────────
+        if (interaction.commandName === 'reseña') {
+            const ordenId = interaction.options.getInteger('orden');
+            const venta   = data.ventas.find(v => v.id === ordenId);
+            if (!venta) return interaction.reply({ content: `⚠️ No existe la orden \`#${ordenId}\`.`, ephemeral: true });
+            if (venta.clienteId !== user.id) return interaction.reply({ content: '⚠️ Solo el cliente puede dejar reseña.', ephemeral: true });
+            if (data.resenas?.find(r => r.ordenId === ordenId)) return interaction.reply({ content: '⚠️ Ya dejaste una reseña para esta orden.', ephemeral: true });
+            const modal = new ModalBuilder().setCustomId(`modal_resena_${ordenId}`).setTitle(`Reseña — Orden #${ordenId}`);
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('estrellas').setLabel('Calificación (1 a 5)').setPlaceholder('Número del 1 al 5').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('comentario').setLabel('Comentario (opcional)').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(300))
+            );
+            return interaction.showModal(modal);
+        }
 
-    // /setlog
-    if (interaction.commandName === 'setlog') {
-        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-            return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
-        data.config.logChannelId = interaction.options.getChannel('canal').id;
-        saveData(guild.id, data);
-        return interaction.reply({ content: `✅ Canal de logs: <#${data.config.logChannelId}>`, ephemeral: true });
-    }
+        // ── /resenas ──────────────────────────────────────────────────────
+        if (interaction.commandName === 'resenas') {
+            const objetivo = interaction.options.getUser('vendedor');
+            const resenas  = data.resenas?.filter(r => r.vendedorId === objetivo.id) ?? [];
+            if (resenas.length === 0) return interaction.reply({ content: `📭 **${objetivo.username}** no tiene reseñas.`, ephemeral: true });
+            const promedio = (resenas.reduce((s, r) => s + r.estrellas, 0) / resenas.length).toFixed(1);
+            const ultimas  = resenas.slice(-5).reverse();
+            const lineas   = ultimas.map(r => `> ${estrellas(r.estrellas)} <@${r.clienteId}>` + (r.comentario ? ` — *"${r.comentario}"*` : '')).join('\n');
+            const embed = new EmbedBuilder().setColor('#FEE75C')
+                .setTitle(`⭐  Reseñas de ${objetivo.username}`)
+                .setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
+                .setDescription(`> **Promedio:** \`${promedio}/5\` *(${resenas.length} reseña${resenas.length !== 1 ? 's' : ''})*\n\n${lineas}`)
+                .setFooter({ text: `Últimas ${ultimas.length} de ${resenas.length}` }).setTimestamp();
+            return interaction.reply({ embeds: [embed] });
+        }
 
-    // /setresenas
-    if (interaction.commandName === 'setresenas') {
-        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-            return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
-        data.config.resenaChannelId = interaction.options.getChannel('canal').id;
-        saveData(guild.id, data);
-        return interaction.reply({ content: `✅ Canal de reseñas: <#${data.config.resenaChannelId}>`, ephemeral: true });
-    }
+        // ── /cancelar ─────────────────────────────────────────────────────
+        if (interaction.commandName === 'cancelar') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
+                return interaction.reply({ content: '🚫 Necesitas permiso de **Gestionar mensajes**.', ephemeral: true });
+            const ordenId = interaction.options.getInteger('orden');
+            const venta   = data.ventas.find(v => v.id === ordenId);
+            if (!venta) return interaction.reply({ content: `⚠️ No existe la orden \`#${ordenId}\`.`, ephemeral: true });
+            if (venta.estado === 'cancelada') return interaction.reply({ content: `⚠️ Ya está cancelada.`, ephemeral: true });
+            const embed = new EmbedBuilder().setColor('#ED4245')
+                .setTitle(`⚠️  ¿Cancelar orden \`#${ordenId}\`?`)
+                .setDescription(
+                    `> 📦  **Producto:** \`${venta.producto}\`\n` +
+                    `> 👤  **Cliente:**  <@${venta.clienteId}>\n` +
+                    `> 💎  **Cantidad:** \`${formatRobux(venta.robux)}\`\n\n` +
+                    `*Esta acción **no se puede deshacer**.*`
+                );
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`cancelar_confirm_${ordenId}`).setLabel('Sí, cancelar').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId(`cancelar_abort_${ordenId}`).setLabel('No, mantener').setStyle(ButtonStyle.Secondary)
+            );
+            return interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+        }
 
-    // /configdm
-    if (interaction.commandName === 'configdm') {
-        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-            return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
-        data.config.dmEnabled = interaction.options.getBoolean('estado');
-        saveData(guild.id, data);
-        return interaction.reply({ content: `✅ DMs: **${data.config.dmEnabled ? 'activados ✅' : 'desactivados ❌'}**`, ephemeral: true });
-    }
+        // ── /exportar ─────────────────────────────────────────────────────
+        if (interaction.commandName === 'exportar') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
+                return interaction.reply({ content: '🚫 Necesitas permiso de **Gestionar mensajes**.', ephemeral: true });
+            const rango  = interaction.options.getString('rango') ?? 'mes';
+            const ventas = ventasPorRango(data.ventas, rango).filter(v => v.estado !== 'cancelada');
+            if (ventas.length === 0) return interaction.reply({ content: '📭 No hay pedidos en ese período.', ephemeral: true });
+            const etiquetas  = { hoy: 'Hoy', semana: 'Esta semana', mes: 'Este mes' };
+            const totalRobux = ventas.reduce((s, v) => s + v.robux, 0);
+            let texto = `REPORTE — ${etiquetas[rango] ?? rango}\nServidor: ${guild.name}\nGenerado: ${new Date().toLocaleString('es-MX')}\n${'─'.repeat(60)}\n\n`;
+            ventas.forEach(v => { texto += `#${v.id} | ${v.producto} | ${formatRobux(v.robux)} | ${v.precio} | ${v.metodo} | Cliente: ${v.clienteTag} | Operador: ${v.vendedorTag}\n`; });
+            texto += `\n${'─'.repeat(60)}\nTOTAL: ${ventas.length} pedidos | ${formatRobux(totalRobux)}\n`;
+            return interaction.reply({ content: `📁 **${ventas.length}** pedidos exportados:`, files: [{ attachment: Buffer.from(texto, 'utf8'), name: `pedidos-${rango}.txt` }], ephemeral: true });
+        }
 
-    // /setdm
-    if (interaction.commandName === 'setdm') {
-        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-            return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
-        const texto = interaction.options.getString('texto');
-        data.config.dmCierreTexto = texto;
-        saveData(guild.id, data);
-        return interaction.reply({ embeds: [new EmbedBuilder().setColor('#57F287').setTitle('✅  Mensaje de cierre actualizado').setDescription(`> ${texto.replace(/\n/g, '\n> ')}\n\n*Variables: \`{usuario}\` \`{servidor}\`*`)], ephemeral: true });
-    }
+        // ── /perfil ───────────────────────────────────────────────────────
+        if (interaction.commandName === 'perfil') {
+            const objetivo     = interaction.options.getUser('usuario');
+            const comoVendedor = data.ventas.filter(v => v.vendedorId === objetivo.id && v.estado !== 'cancelada');
+            const comoCliente  = data.ventas.filter(v => v.clienteId  === objetivo.id && v.estado !== 'cancelada');
+            const resenas      = data.resenas?.filter(r => r.vendedorId === objetivo.id) ?? [];
+            const promedio     = resenas.length > 0 ? `${(resenas.reduce((s, r) => s + r.estrellas, 0) / resenas.length).toFixed(1)}/5` : 'Sin reseñas';
 
-    // /stock
-    if (interaction.commandName === 'stock') {
-        const stock = data.stock ?? [];
-        if (stock.length === 0) return interaction.reply({ content: '📭 El stock está vacío.', ephemeral: false });
-        const lineas = stock.map(item =>
-            `> 📦  **${item.nombre}**\n` +
-            `> ├ 🔢 Cantidad: \`${item.cantidad}\`\n` +
-            `> ├ 💵 Precio:   \`${item.precio ?? 'No especificado'}\`\n` +
-            `> └ 📝 Notas:    \`${item.notas ?? '—'}\``
-        ).join('\n\n');
-        const embed = new EmbedBuilder().setColor('#5865F2').setTitle('📦  Stock disponible').setDescription(lineas).setFooter({ text: `${stock.length} ítem(s) • ${guild.name} · Aurex` }).setTimestamp();
-        return interaction.reply({ embeds: [embed] });
-    }
+            // Tier actual del cliente
+            const comprasCliente = data.analytics.porCliente?.[objetivo.id]?.compras ?? 0;
+            let tierActual = 'Sin tier';
+            for (const tier of TIER_UMBRALES) {
+                if (comprasCliente >= tier.minCompras) tierActual = tier.nombre.charAt(0).toUpperCase() + tier.nombre.slice(1);
+            }
+            const tierEmoji = { Bronce: '🥉', Plata: '🥈', Oro: '🥇', Vip: '💎' }[tierActual] ?? '';
 
-    // /stock-admin
-    if (interaction.commandName === 'stock-admin') {
-        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-            return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
-        const accion   = interaction.options.getString('accion');
-        const nombre   = interaction.options.getString('nombre');
-        const cantidad = interaction.options.getInteger('cantidad');
-        const precio   = interaction.options.getString('precio');
-        const notas    = interaction.options.getString('notas');
-        if (!data.stock) data.stock = [];
-        if (accion === 'agregar') {
-            data.stock.push({ nombre, cantidad: cantidad ?? 0, precio: precio ?? null, notas: notas ?? null });
+            const embed = new EmbedBuilder().setColor('#5865F2')
+                .setTitle(`👤  ${objetivo.username}`)
+                .setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
+                .setDescription(
+                    `**Como operador**\n` +
+                    `> 🧾  **Pedidos:**    \`${comoVendedor.length}\`\n` +
+                    `> 💎  **R$ movidos:** \`${formatRobux(comoVendedor.reduce((s, v) => s + v.robux, 0))}\`\n` +
+                    `> ⭐  **Valoración:** \`${promedio}\`\n\n` +
+                    `**Como cliente**\n` +
+                    `> 🛒  **Compras:**    \`${comoCliente.length}\`\n` +
+                    `> 💎  **R$ gastados:** \`${formatRobux(comoCliente.reduce((s, v) => s + v.robux, 0))}\`\n` +
+                    `> 🎖️  **Tier:**       \`${tierEmoji} ${tierActual}\``
+                )
+                .setFooter({ text: guild.name }).setTimestamp();
+            return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
+
+        // ── /stats ────────────────────────────────────────────────────────
+        if (interaction.commandName === 'stats') {
+            const rango  = interaction.options.getString('rango') ?? 'hoy';
+            const ventas = ventasPorRango(data.ventas, rango).filter(v => v.estado !== 'cancelada');
+            const robux  = ventas.reduce((s, v) => s + v.robux, 0);
+            const etiquetas = { hoy: 'Hoy', semana: 'Esta semana', mes: 'Este mes' };
+            const embed = new EmbedBuilder().setColor('#FEE75C')
+                .setTitle(`📊  Stats — ${etiquetas[rango] ?? rango}`)
+                .setDescription(
+                    `> 🧾  **Pedidos:**         \`${ventas.length}\`\n` +
+                    `> 💎  **R$ movidos:**      \`${formatRobux(robux)}\`\n` +
+                    `> 👥  **Clientes únicos:** \`${new Set(ventas.map(v => v.clienteId)).size}\`\n\n` +
+                    `> 📦  **Total histórico:** \`${data.ventas.filter(v => v.estado !== 'cancelada').length}\`\n` +
+                    `> 💰  **Total R$ hist.:**  \`${formatRobux(data.analytics.totalRobux)}\``
+                )
+                .setFooter({ text: guild.name }).setTimestamp();
+            return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
+
+        // ── /top ──────────────────────────────────────────────────────────
+        if (interaction.commandName === 'top') {
+            const tipo     = interaction.options.getString('tipo') ?? 'vendedores';
+            const por      = interaction.options.getString('por')  ?? 'ventas';
+            const medallas = ['🥇', '🥈', '🥉'];
+            if (tipo === 'compradores') {
+                const compradores = Object.entries(data.analytics.porCliente ?? {}).map(([id, d]) => ({ id, ...d })).filter(c => c.compras > 0).sort((a, b) => por === 'robux' ? b.robux - a.robux : b.compras - a.compras).slice(0, 10);
+                if (compradores.length === 0) return interaction.reply({ content: '📭 Sin compras aún.', ephemeral: true });
+                const lineas = compradores.map((c, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${c.id}> — \`${c.compras}\` compra(s) • \`${formatRobux(c.robux)}\``).join('\n');
+                return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle('👑  Top compradores').setDescription(lineas).setTimestamp()] });
+            }
+            const vendedores = Object.entries(data.analytics.porVendedor).map(([id, d]) => ({ id, ...d })).filter(v => v.ventas > 0).sort((a, b) => por === 'robux' ? b.robux - a.robux : b.ventas - a.ventas).slice(0, 10);
+            if (vendedores.length === 0) return interaction.reply({ content: '📭 Sin pedidos aún.', ephemeral: true });
+            const lineas = vendedores.map((v, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${v.id}> — \`${v.ventas}\` pedido(s) • \`${formatRobux(v.robux)}\``).join('\n');
+            return interaction.reply({ embeds: [new EmbedBuilder().setColor('#57F287').setTitle('🏆  Top operadores').setDescription(lineas).setTimestamp()] });
+        }
+
+        // ── /dashboard ────────────────────────────────────────────────────
+        if (interaction.commandName === 'dashboard') {
+            const hoy    = ventasPorRango(data.ventas, 'hoy').filter(v => v.estado !== 'cancelada');
+            const semana = ventasPorRango(data.ventas, 'semana').filter(v => v.estado !== 'cancelada');
+            const mes    = ventasPorRango(data.ventas, 'mes').filter(v => v.estado !== 'cancelada');
+            const topV   = Object.entries(data.analytics.porVendedor).sort((a, b) => b[1].ventas - a[1].ventas)[0];
+            const topC   = data.analytics.porCliente ? Object.entries(data.analytics.porCliente).sort((a, b) => b[1].compras - a[1].compras)[0] : null;
+            const totalR = data.resenas?.length ?? 0;
+            const prom   = totalR > 0 ? (data.resenas.reduce((s, r) => s + r.estrellas, 0) / totalR).toFixed(1) : null;
+            const embed  = new EmbedBuilder().setColor('#5865F2')
+                .setTitle(`📈  Dashboard — ${guild.name}`)
+                .setThumbnail(guild.iconURL({ dynamic: true }) ?? null)
+                .setDescription(
+                    `> 🌅  **Hoy:**         \`${hoy.length}\` pedidos • \`${formatRobux(hoy.reduce((s, v) => s + v.robux, 0))}\`\n` +
+                    `> 📅  **Esta semana:** \`${semana.length}\` pedidos • \`${formatRobux(semana.reduce((s, v) => s + v.robux, 0))}\`\n` +
+                    `> 🗓️  **Este mes:**    \`${mes.length}\` pedidos • \`${formatRobux(mes.reduce((s, v) => s + v.robux, 0))}\`\n` +
+                    `> 📦  **Histórico:**   \`${data.analytics.totalVentas}\` pedidos • \`${formatRobux(data.analytics.totalRobux)}\`\n\n` +
+                    `> 🏆  **Top operador:** ${topV ? `<@${topV[0]}> (\`${topV[1].ventas}\` pedidos)` : '`Sin datos`'}\n` +
+                    `> 👑  **Top cliente:**  ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}\n` +
+                    (prom ? `> ⭐  **Valoración:**  \`${prom}/5\` *(${totalR} reseñas)*` : '')
+                )
+                .setFooter({ text: 'Aurex' }).setTimestamp();
+            return interaction.reply({ embeds: [embed] });
+        }
+
+        // ── /afk ──────────────────────────────────────────────────────────
+        if (interaction.commandName === 'afk') {
+            const motivo = interaction.options.getString('motivo') ?? 'Sin motivo';
+            data.afk[user.id] = { motivo, tiempo: Date.now(), menciones: [] };
             saveData(guild.id, data);
-            return interaction.reply({ embeds: [new EmbedBuilder().setColor('#57F287').setTitle('✅  Ítem agregado').setDescription(`> 📦  **${nombre}** — Cantidad: \`${cantidad ?? 0}\` — Precio: \`${precio ?? 'No especificado'}\``)], ephemeral: true });
+            return interaction.reply({ embeds: [new EmbedBuilder().setColor('#3498DB').setDescription(`### 💤  AFK activado\n\n> **${user.username}** — *${motivo}*`)] });
         }
-        if (accion === 'editar') {
-            const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre?.toLowerCase());
-            if (idx === -1) return interaction.reply({ content: `⚠️ No existe \`${nombre}\`.`, ephemeral: true });
-            if (cantidad !== null) data.stock[idx].cantidad = cantidad;
-            if (precio   !== null) data.stock[idx].precio   = precio;
-            if (notas    !== null) data.stock[idx].notas    = notas;
+
+        // ── /anuncio ──────────────────────────────────────────────────────
+        if (interaction.commandName === 'anuncio') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
+                return interaction.reply({ content: '🚫 Necesitas permiso de **Gestionar mensajes**.', ephemeral: true });
+            const titulo      = interaction.options.getString('titulo');
+            const cuerpo      = interaction.options.getString('mensaje');
+            const textoBoton  = interaction.options.getString('texto_boton');
+            const enlaceBoton = interaction.options.getString('enlace_boton');
+            const embed = new EmbedBuilder().setColor('#ED4245').setTitle(`📢  ${titulo}`).setDescription(cuerpo).setFooter({ text: `Anuncio por ${user.tag} · Aurex` }).setTimestamp();
+            const opts = { embeds: [embed] };
+            if (textoBoton && enlaceBoton) opts.components = [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(textoBoton).setURL(enlaceBoton).setStyle(ButtonStyle.Link))];
+            await interaction.reply({ content: '✅ Anuncio enviado.', ephemeral: true });
+            return interaction.channel.send(opts);
+        }
+
+        // ── /clear ────────────────────────────────────────────────────────
+        if (interaction.commandName === 'clear') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
+                return interaction.reply({ content: '🚫 Necesitas permiso de **Gestionar mensajes**.', ephemeral: true });
+            const cantidad = interaction.options.getInteger('cantidad');
+            if (cantidad < 1 || cantidad > 100) return interaction.reply({ content: '⚠️ Entre 1 y 100.', ephemeral: true });
+            const deleted = await interaction.channel.bulkDelete(cantidad, true).catch(() => null);
+            return interaction.reply({ content: `🗑️ **${deleted?.size ?? 0}** mensaje(s) eliminados.`, ephemeral: true });
+        }
+
+        // ── /setlog ───────────────────────────────────────────────────────
+        if (interaction.commandName === 'setlog') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
+            data.config.logChannelId = interaction.options.getChannel('canal').id;
             saveData(guild.id, data);
-            return interaction.reply({ content: `✅ \`${data.stock[idx].nombre}\` actualizado.`, ephemeral: true });
+            return interaction.reply({ content: `✅ Canal de logs: <#${data.config.logChannelId}>`, ephemeral: true });
         }
-        if (accion === 'eliminar') {
-            const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre?.toLowerCase());
-            if (idx === -1) return interaction.reply({ content: `⚠️ No existe \`${nombre}\`.`, ephemeral: true });
-            data.stock.splice(idx, 1);
+
+        // ── /setresenas ───────────────────────────────────────────────────
+        if (interaction.commandName === 'setresenas') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
+            data.config.resenaChannelId = interaction.options.getChannel('canal').id;
             saveData(guild.id, data);
-            return interaction.reply({ content: `🗑️ **${nombre}** eliminado del stock.`, ephemeral: true });
+            return interaction.reply({ content: `✅ Canal de reseñas: <#${data.config.resenaChannelId}>`, ephemeral: true });
         }
-        if (accion === 'limpiar') {
-            data.stock = [];
+
+        // ── /configdm ─────────────────────────────────────────────────────
+        if (interaction.commandName === 'configdm') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
+            data.config.dmEnabled = interaction.options.getBoolean('estado');
             saveData(guild.id, data);
-            return interaction.reply({ content: '🗑️ Stock limpiado.', ephemeral: true });
+            return interaction.reply({ content: `✅ DMs: **${data.config.dmEnabled ? 'activados ✅' : 'desactivados ❌'}**`, ephemeral: true });
         }
-    }
+
+        // ── /setdm ────────────────────────────────────────────────────────
+        if (interaction.commandName === 'setdm') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
+            const texto = interaction.options.getString('texto');
+            data.config.dmCierreTexto = texto;
+            saveData(guild.id, data);
+            return interaction.reply({ embeds: [new EmbedBuilder().setColor('#57F287').setTitle('✅  Mensaje de cierre actualizado').setDescription(`> ${texto.replace(/\n/g, '\n> ')}\n\n*Variables: \`{usuario}\` \`{servidor}\`*`)], ephemeral: true });
+        }
+
+        // ── /stock ────────────────────────────────────────────────────────
+        if (interaction.commandName === 'stock') {
+            const stock = data.stock ?? [];
+            if (stock.length === 0) return interaction.reply({ content: '📭 El stock está vacío.', ephemeral: false });
+            const lineas = stock.map(item =>
+                `> 📦  **${item.nombre}**\n` +
+                `> ├ 🔢 Cantidad: \`${item.cantidad}\`\n` +
+                `> ├ 💵 Precio:   \`${item.precio ?? 'No especificado'}\`\n` +
+                `> └ 📝 Notas:    \`${item.notas ?? '—'}\``
+            ).join('\n\n');
+            const embed = new EmbedBuilder().setColor('#5865F2').setTitle('📦  Stock disponible').setDescription(lineas).setFooter({ text: `${stock.length} ítem(s) • ${guild.name} · Aurex` }).setTimestamp();
+            return interaction.reply({ embeds: [embed] });
+        }
+
+        // ── /stock-admin ──────────────────────────────────────────────────
+        if (interaction.commandName === 'stock-admin') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
+            const accion   = interaction.options.getString('accion');
+            const nombre   = interaction.options.getString('nombre');
+            const cantidad = interaction.options.getInteger('cantidad');
+            const precio   = interaction.options.getString('precio');
+            const notas    = interaction.options.getString('notas');
+            if (!data.stock) data.stock = [];
+            if (accion === 'agregar') {
+                data.stock.push({ nombre, cantidad: cantidad ?? 0, precio: precio ?? null, notas: notas ?? null });
+                saveData(guild.id, data);
+                return interaction.reply({ embeds: [new EmbedBuilder().setColor('#57F287').setTitle('✅  Ítem agregado').setDescription(`> 📦  **${nombre}** — Cantidad: \`${cantidad ?? 0}\` — Precio: \`${precio ?? 'No especificado'}\``)], ephemeral: true });
+            }
+            if (accion === 'editar') {
+                const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre?.toLowerCase());
+                if (idx === -1) return interaction.reply({ content: `⚠️ No existe \`${nombre}\`.`, ephemeral: true });
+                if (cantidad !== null) data.stock[idx].cantidad = cantidad;
+                if (precio   !== null) data.stock[idx].precio   = precio;
+                if (notas    !== null) data.stock[idx].notas    = notas;
+                saveData(guild.id, data);
+                return interaction.reply({ content: `✅ \`${data.stock[idx].nombre}\` actualizado.`, ephemeral: true });
+            }
+            if (accion === 'eliminar') {
+                const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre?.toLowerCase());
+                if (idx === -1) return interaction.reply({ content: `⚠️ No existe \`${nombre}\`.`, ephemeral: true });
+                data.stock.splice(idx, 1);
+                saveData(guild.id, data);
+                return interaction.reply({ content: `🗑️ **${nombre}** eliminado del stock.`, ephemeral: true });
+            }
+            if (accion === 'limpiar') {
+                data.stock = [];
+                saveData(guild.id, data);
+                return interaction.reply({ content: '🗑️ Stock limpiado.', ephemeral: true });
+            }
+        }
+
+        // ── /stock-bulk ───────────────────────────────────────────────────
+        // Formato del texto:
+        //   NombreProducto | cantidad | precio | notas
+        //   (una línea por ítem, notas y precio opcionales)
+        if (interaction.commandName === 'stock-bulk') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return interaction.reply({ content: '🚫 Solo administradores.', ephemeral: true });
+
+            const texto   = interaction.options.getString('items');
+            const modo    = interaction.options.getString('modo') ?? 'agregar';
+
+            const lineas  = texto.split('\n').map(l => l.trim()).filter(Boolean);
+            if (lineas.length === 0)
+                return interaction.reply({ content: '⚠️ No se detectó ningún ítem.', ephemeral: true });
+            if (lineas.length > 50)
+                return interaction.reply({ content: '⚠️ Máximo 50 ítems por vez.', ephemeral: true });
+
+            if (!data.stock) data.stock = [];
+            if (modo === 'reemplazar') data.stock = [];
+
+            const agregados = [];
+            const errores   = [];
+
+            for (const linea of lineas) {
+                const partes = linea.split('|').map(p => p.trim());
+                const nombre = partes[0];
+                if (!nombre) { errores.push(`\`${linea}\` — sin nombre`); continue; }
+                const cantidad = partes[1] ? parseInt(partes[1]) : 0;
+                const precio   = partes[2] || null;
+                const notas    = partes[3] || null;
+
+                // Si ya existe, actualizar; si no, agregar
+                const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre.toLowerCase());
+                if (idx !== -1) {
+                    data.stock[idx] = { nombre, cantidad: isNaN(cantidad) ? data.stock[idx].cantidad : cantidad, precio: precio ?? data.stock[idx].precio, notas: notas ?? data.stock[idx].notas };
+                } else {
+                    data.stock.push({ nombre, cantidad: isNaN(cantidad) ? 0 : cantidad, precio, notas });
+                }
+                agregados.push(`\`${nombre}\``);
+            }
+
+            saveData(guild.id, data);
+
+            const resumen =
+                `✅ **${agregados.length}** ítem(s) procesados` +
+                (modo === 'reemplazar' ? ' *(stock reemplazado)*' : '') +
+                `\n\n${agregados.join(', ')}` +
+                (errores.length > 0 ? `\n\n⚠️ **Errores (${errores.length}):**\n${errores.join('\n')}` : '');
+
+            return interaction.reply({ content: resumen, ephemeral: true });
+        }
+    });
 });
 
 client.login(process.env.TOKEN);
