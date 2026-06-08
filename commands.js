@@ -72,6 +72,13 @@ const commands = [
             }
         ]
     },
+    {
+        name: 'factura',
+        description: 'Envía un comprobante detallado de una orden por DM al cliente.',
+        options: [
+            { name: 'orden', type: ApplicationCommandOptionType.Integer, description: 'Número de orden', required: true }
+        ]
+    },
 
     // ── Stock ─────────────────────────────────────────────────────────────
     { name: 'stock', description: 'Muestra el stock disponible del servidor.' },
@@ -155,6 +162,10 @@ const commands = [
             { name: 'usuario', type: ApplicationCommandOptionType.User, description: 'Usuario a consultar', required: true }
         ]
     },
+    {
+        name: 'servidor-stats',
+        description: 'Tarjeta completa con clientes únicos, operadores, tickets cerrados y R$ totales.'
+    },
 
     // ── Reputación ────────────────────────────────────────────────────────
     {
@@ -219,6 +230,24 @@ const commands = [
             { name: 'mensaje',      type: ApplicationCommandOptionType.String, description: 'Cuerpo del anuncio',          required: true  },
             { name: 'texto_boton',  type: ApplicationCommandOptionType.String, description: 'Texto del botón (opcional)',  required: false },
             { name: 'enlace_boton', type: ApplicationCommandOptionType.String, description: 'URL del botón (https://...)', required: false }
+        ]
+    },
+    {
+        name: 'sorteo',
+        description: 'Crea un sorteo con botón de participar. Más compras = más entradas. (Solo admins)',
+        options: [
+            { name: 'premio',     type: ApplicationCommandOptionType.String,  description: 'Premio del sorteo',                          required: true  },
+            { name: 'duracion',   type: ApplicationCommandOptionType.Integer, description: 'Duración en minutos (por defecto 60)',        required: false },
+            { name: 'ganadores',  type: ApplicationCommandOptionType.Integer, description: 'Cantidad de ganadores (por defecto 1)',       required: false }
+        ]
+    },
+    {
+        name: 'notificar',
+        description: 'Envía un DM masivo a todos los clientes registrados del servidor. (Solo admins)',
+        options: [
+            { name: 'mensaje',       type: ApplicationCommandOptionType.String,  description: 'Cuerpo del mensaje a enviar',                          required: true  },
+            { name: 'titulo',        type: ApplicationCommandOptionType.String,  description: 'Título del embed (opcional)',                          required: false },
+            { name: 'solo_activos',  type: ApplicationCommandOptionType.Boolean, description: 'Solo clientes con compra en los últimos 30 días',      required: false }
         ]
     },
     {

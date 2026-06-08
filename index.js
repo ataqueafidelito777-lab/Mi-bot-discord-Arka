@@ -8,7 +8,7 @@ const fs   = require('fs');
 const path = require('path');
 require('dotenv').config();
 
-const BANNER_URL = 'https://i.imgur.com/REEMPLAZA.png';
+const BANNER_URL = 'https://i.imgur.com/RHLSmgM.png';
 
 const TIER_UMBRALES = [
     { nombre: 'bronce', minCompras: 1,  emoji: '🥉', label: 'Bronce' },
@@ -40,7 +40,8 @@ function defaultData() {
         ventas: [], resenas: [],
         config: { logChannelId: null, dmEnabled: true, resenaChannelId: null, dmCierreTexto: null, tierRoles: {} },
         afk: {}, stock: [],
-        analytics: { totalVentas: 0, totalRobux: 0, porVendedor: {}, porCliente: {} }
+        analytics: { totalVentas: 0, totalRobux: 0, porVendedor: {}, porCliente: {} },
+        sorteos: []
     };
 }
 function loadTickets(guildId) {
@@ -205,7 +206,6 @@ function buildLogEmbed(venta, n) {
         .setFooter({ text: `Aurex • ${today()}` }).setTimestamp();
 }
 function buildDMVentaEmbed(venta, n, guildName, guildIconURL) {
-    // DM estilo Sharkie — más visual y con imagen del servidor
     return new EmbedBuilder()
         .setColor('#57F287')
         .setAuthor({ name: guildName, iconURL: guildIconURL ?? undefined })
@@ -245,7 +245,8 @@ const HELP_CATEGORIAS = {
                 `**\`/historial\`**\n> Lista los últimos pedidos. Filtra por período o usuario.\n\n` +
                 `**\`/buscar [cliente]\`**\n> Muestra todos los pedidos de un cliente específico.\n\n` +
                 `**\`/cancelar [orden]\`**\n> Cancela una orden con confirmación. *(Requiere Gestionar mensajes)*\n\n` +
-                `**\`/exportar\`**\n> Descarga un archivo .txt con los pedidos del período.`
+                `**\`/exportar\`**\n> Descarga un archivo .txt con los pedidos del período.\n\n` +
+                `**\`/factura [orden]\`**\n> Envía un comprobante detallado por DM al cliente de la orden.`
             ).setFooter({ text: 'Aurex • /help • Pedidos' }).setTimestamp()
     },
     analiticas: {
@@ -256,6 +257,7 @@ const HELP_CATEGORIAS = {
                 `**\`/stats\`**\n> Pedidos y R$ movidos hoy, esta semana o este mes.\n\n` +
                 `**\`/top\`**\n> Ranking de operadores o clientes. Ordena por ventas o R$.\n\n` +
                 `**\`/dashboard\`**\n> Resumen visual completo: pedidos, R$, top operador y cliente.\n\n` +
+                `**\`/servidor-stats\`**\n> Tarjeta completa con clientes únicos, operadores, tickets y R$ totales.\n\n` +
                 `**\`/perfil [usuario]\`**\n> Estadísticas completas de cualquier usuario: ventas, compras, tier y valoración.`
             ).setFooter({ text: 'Aurex • /help • Analíticas' }).setTimestamp()
     },
@@ -295,7 +297,8 @@ const HELP_CATEGORIAS = {
                 `> ⚠️  **Reporte** — Reportes de usuarios o situaciones\n` +
                 `> ℹ️  **Otros** — Cualquier otra consulta\n\n` +
                 `> ⏳ Cooldown de **10 minutos** entre tickets cerrados.\n` +
-                `> 📋 Se genera transcript automático al cerrar.`
+                `> 📋 Se genera transcript automático al cerrar.\n` +
+                `> 🔔 El bot menciona al staff si un ticket lleva más de 60 min sin respuesta.`
             ).setFooter({ text: 'Aurex • /help • Tickets' }).setTimestamp()
     },
     utilidades: {
@@ -305,6 +308,8 @@ const HELP_CATEGORIAS = {
                 `> Herramientas generales del bot.\n\n` +
                 `**\`/afk [motivo]\`**\n> Activa el modo AFK. El bot notifica a quienes te mencionen y registra las menciones.\n\n` +
                 `**\`/anuncio\`**\n> Envía un anuncio con embed al canal actual. Puedes agregar un botón con enlace. *(Requiere Gestionar mensajes)*\n\n` +
+                `**\`/notificar\`**\n> Envía un DM masivo a todos los clientes registrados del servidor. *(Solo admins)*\n\n` +
+                `**\`/sorteo\`**\n> Crea un sorteo con botón de participar. Clientes con más compras tienen más entradas. *(Solo admins)*\n\n` +
                 `**\`/clear [cantidad]\`**\n> Borra entre 1 y 100 mensajes del canal. *(Requiere Gestionar mensajes)*\n\n` +
                 `**\`/ping\`**\n> Muestra la latencia actual del bot.`
             ).setFooter({ text: 'Aurex • /help • Utilidades' }).setTimestamp()
@@ -346,7 +351,6 @@ function buildHelpInicio(guild) {
 
 function buildHelpRows() {
     const keys = Object.keys(HELP_CATEGORIAS);
-    // Fila 1 — primeras 4 categorías
     const row1 = new ActionRowBuilder().addComponents(
         keys.slice(0, 4).map(k => {
             const cat = HELP_CATEGORIAS[k];
@@ -357,7 +361,6 @@ function buildHelpRows() {
                 .setStyle(ButtonStyle.Secondary);
         })
     );
-    // Fila 2 — resto + botón inicio
     const row2 = new ActionRowBuilder().addComponents(
         ...keys.slice(4).map(k => {
             const cat = HELP_CATEGORIAS[k];
@@ -517,7 +520,11 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
     const canalTicket = await guild.channels.create({ name: nombreCanal, type: ChannelType.GuildText, parent: tdata.config.categoryId ?? null, permissionOverwrites: permisos });
 
     const ticketId = tdata.tickets.length + 1;
-    tdata.tickets.push({ id: ticketId, channelId: canalTicket.id, userId: user.id, userTag: user.tag, categoria: categoriaKey, estado: 'abierto', timestamp: Date.now(), datosModal });
+    tdata.tickets.push({
+        id: ticketId, channelId: canalTicket.id, userId: user.id, userTag: user.tag,
+        categoria: categoriaKey, estado: 'abierto', timestamp: Date.now(),
+        datosModal, ultimaActividad: Date.now(), recordatorioEnviado: false
+    });
     saveTickets(guild.id, tdata);
 
     let descripcion = cat.bienvenida(user.username);
@@ -556,7 +563,6 @@ async function cerrarTicket(interaction, ticketId) {
     saveTickets(guild.id, tdata);
     await interaction.editReply({ embeds: [new EmbedBuilder().setColor('#ED4245').setTitle('🔒  Ticket cerrado').setDescription(`> Cerrado por <@${interaction.user.id}>\n> El canal se eliminará en **5 segundos**.`).setTimestamp()] });
 
-    // DM estilo Sharkie al usuario
     try {
         const gdata = loadData(guild.id);
         const dmTexto = gdata.config.dmCierreTexto ?? `¡Hola, **{usuario}**! 👋\n\nEsperamos haberte atendido de la mejor manera en **{servidor}**.\n\n> *Si tuviste algún inconveniente, no dudes en abrir un nuevo ticket.*\n\n¡Gracias por confiar en nosotros! 💙`;
@@ -650,6 +656,462 @@ async function handleStockBulkModal(interaction) {
 }
 
 // ─────────────────────────────────────────────
+//  SORTEO — helpers
+// ─────────────────────────────────────────────
+function sorteoEntradas(data, userId) {
+    // Clientes con más compras tienen más entradas (base 1 + 1 por cada 5 compras, máx 10)
+    const compras = data.analytics?.porCliente?.[userId]?.compras ?? 0;
+    return Math.min(1 + Math.floor(compras / 5), 10);
+}
+
+function buildSorteoEmbed(sorteo, guildName) {
+    const ahora = Date.now();
+    const terminado = ahora >= sorteo.fin;
+    const tiempoRestante = terminado ? 'Finalizado' : tiempoRelativo(sorteo.fin - ahora);
+    const participantes = sorteo.participantes?.length ?? 0;
+    const entradas = sorteo.participantes?.reduce((s, p) => s + p.entradas, 0) ?? 0;
+
+    return new EmbedBuilder()
+        .setColor(terminado ? '#ED4245' : '#FEE75C')
+        .setTitle(`🎉  Sorteo — ${sorteo.premio}`)
+        .setDescription(
+            `> 🎁  **Premio:**       \`${sorteo.premio}\`\n` +
+            `> ⏰  **Tiempo:**       \`${tiempoRestante}\`\n` +
+            `> 👥  **Participantes:** \`${participantes}\`\n` +
+            `> 🎟️  **Entradas tot.:** \`${entradas}\`\n` +
+            `> 🏆  **Ganadores:**    \`${sorteo.cantGanadores}\`\n\n` +
+            `> *Los clientes con más compras tienen más entradas.*\n` +
+            `> *Máximo 10 entradas por usuario.*\n\n` +
+            (terminado && sorteo.ganadores?.length
+                ? `**🏆 Ganador${sorteo.ganadores.length > 1 ? 'es' : ''}:**\n${sorteo.ganadores.map(id => `> <@${id}>`).join('\n')}`
+                : terminado ? '> *Sin participantes para elegir ganador.*' : '')
+        )
+        .setImage(BANNER_URL)
+        .setFooter({ text: `${guildName} · Aurex · ID: ${sorteo.id}` })
+        .setTimestamp();
+}
+
+function elegirGanadores(participantes, cantidad) {
+    // Construir pool pesado por entradas
+    const pool = [];
+    for (const p of participantes) {
+        for (let i = 0; i < p.entradas; i++) pool.push(p.userId);
+    }
+    if (pool.length === 0) return [];
+    const ganadores = new Set();
+    const maxIntentos = pool.length * 3;
+    let intentos = 0;
+    while (ganadores.size < Math.min(cantidad, participantes.length) && intentos < maxIntentos) {
+        ganadores.add(pool[Math.floor(Math.random() * pool.length)]);
+        intentos++;
+    }
+    return [...ganadores];
+}
+
+// ─────────────────────────────────────────────
+//  SORTEO — handler botón participar
+// ─────────────────────────────────────────────
+async function handleSorteoParticipar(interaction, sorteoId) {
+    const data = loadData(interaction.guild.id);
+    if (!data.sorteos) data.sorteos = [];
+    const sorteo = data.sorteos.find(s => s.id === sorteoId);
+    if (!sorteo) return safeReply(interaction, { content: '⚠️ Este sorteo ya no existe.' });
+    if (Date.now() >= sorteo.fin) return safeReply(interaction, { content: '⏰ Este sorteo ya terminó.' });
+    if (sorteo.estado !== 'activo') return safeReply(interaction, { content: '⚠️ Este sorteo no está activo.' });
+
+    const yaParticipa = sorteo.participantes?.find(p => p.userId === interaction.user.id);
+    if (yaParticipa) return safeReply(interaction, { content: `✅ Ya estás participando con **${yaParticipa.entradas}** entrada(s). ¡Buena suerte!` });
+
+    const entradas = sorteoEntradas(data, interaction.user.id);
+    if (!sorteo.participantes) sorteo.participantes = [];
+    sorteo.participantes.push({ userId: interaction.user.id, userTag: interaction.user.tag, entradas });
+    saveData(interaction.guild.id, data);
+
+    // Actualizar embed del mensaje
+    try {
+        const embedActualizado = buildSorteoEmbed(sorteo, interaction.guild.name);
+        const rowSorteo = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`sorteo_participar_${sorteoId}`).setLabel('🎟️ Participar').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`sorteo_finalizar_${sorteoId}`).setLabel('🏆 Finalizar').setStyle(ButtonStyle.Secondary)
+        );
+        await interaction.message.edit({ embeds: [embedActualizado], components: [rowSorteo] }).catch(() => {});
+    } catch { /* no crítico */ }
+
+    return safeReply(interaction, { content: `🎟️ ¡Participas en el sorteo con **${entradas}** entrada(s)!\n> *Más compras = más entradas (máx. 10)*` });
+}
+
+// ─────────────────────────────────────────────
+//  SORTEO — handler botón finalizar
+// ─────────────────────────────────────────────
+async function handleSorteoFinalizar(interaction, sorteoId) {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+        return safeReply(interaction, { content: '🚫 Solo administradores pueden finalizar sorteos.' });
+
+    const data = loadData(interaction.guild.id);
+    if (!data.sorteos) data.sorteos = [];
+    const sorteo = data.sorteos.find(s => s.id === sorteoId);
+    if (!sorteo) return safeReply(interaction, { content: '⚠️ Sorteo no encontrado.' });
+    if (sorteo.estado === 'finalizado') return safeReply(interaction, { content: '⚠️ Este sorteo ya fue finalizado.' });
+
+    sorteo.estado = 'finalizado';
+    sorteo.fin = Date.now();
+    sorteo.ganadores = elegirGanadores(sorteo.participantes ?? [], sorteo.cantGanadores);
+    saveData(interaction.guild.id, data);
+
+    const embedFinal = buildSorteoEmbed(sorteo, interaction.guild.name);
+    const rowFinalizado = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`sorteo_participar_${sorteoId}`).setLabel('🎟️ Participar').setStyle(ButtonStyle.Success).setDisabled(true),
+        new ButtonBuilder().setCustomId(`sorteo_finalizar_${sorteoId}`).setLabel('✅ Finalizado').setStyle(ButtonStyle.Secondary).setDisabled(true)
+    );
+
+    await interaction.update({ embeds: [embedFinal], components: [rowFinalizado] }).catch(() => {});
+
+    if (sorteo.ganadores.length > 0) {
+        const mencionesList = sorteo.ganadores.map(id => `<@${id}>`).join(', ');
+        await interaction.channel.send({
+            content: `🎉 **¡Felicitaciones!** ${mencionesList}\n> ¡Ganaste el sorteo de **${sorteo.premio}**! 🎁`,
+        }).catch(() => {});
+    } else {
+        await interaction.channel.send({ content: '😔 El sorteo terminó sin participantes suficientes.' }).catch(() => {});
+    }
+}
+
+// ─────────────────────────────────────────────
+//  /sorteo — comando
+// ─────────────────────────────────────────────
+async function handleSorteo(interaction) {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+        return safeReply(interaction, { content: '🚫 Solo administradores.' });
+
+    const premio       = interaction.options.getString('premio');
+    const duracionMin  = interaction.options.getInteger('duracion') ?? 60;  // minutos
+    const cantGanadores = interaction.options.getInteger('ganadores') ?? 1;
+
+    const data = loadData(interaction.guild.id);
+    if (!data.sorteos) data.sorteos = [];
+
+    const sorteoId = `${interaction.guild.id}_${Date.now()}`;
+    const fin = Date.now() + duracionMin * 60 * 1000;
+
+    const sorteo = {
+        id: sorteoId,
+        premio,
+        fin,
+        cantGanadores,
+        estado: 'activo',
+        participantes: [],
+        ganadores: [],
+        canalId: interaction.channelId,
+        timestamp: Date.now()
+    };
+
+    data.sorteos.push(sorteo);
+    // Limpiar sorteos viejos (>7 días) para no inflar el JSON
+    data.sorteos = data.sorteos.filter(s => Date.now() - s.timestamp < 7 * 24 * 60 * 60 * 1000);
+    saveData(interaction.guild.id, data);
+
+    const embedSorteo = buildSorteoEmbed(sorteo, interaction.guild.name);
+    const rowSorteo = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`sorteo_participar_${sorteoId}`).setLabel('🎟️ Participar').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`sorteo_finalizar_${sorteoId}`).setLabel('🏆 Finalizar').setStyle(ButtonStyle.Secondary)
+    );
+
+    await interaction.reply({ embeds: [embedSorteo], components: [rowSorteo] });
+
+    // Finalización automática
+    setTimeout(async () => {
+        const dataActual = loadData(interaction.guild.id);
+        const sorteoActual = dataActual.sorteos?.find(s => s.id === sorteoId);
+        if (!sorteoActual || sorteoActual.estado === 'finalizado') return;
+        sorteoActual.estado = 'finalizado';
+        sorteoActual.ganadores = elegirGanadores(sorteoActual.participantes ?? [], sorteoActual.cantGanadores);
+        saveData(interaction.guild.id, dataActual);
+        try {
+            const msg = await interaction.fetchReply();
+            const embedFinal = buildSorteoEmbed(sorteoActual, interaction.guild.name);
+            const rowFinalizado = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`sorteo_participar_${sorteoId}`).setLabel('🎟️ Participar').setStyle(ButtonStyle.Success).setDisabled(true),
+                new ButtonBuilder().setCustomId(`sorteo_finalizar_${sorteoId}`).setLabel('✅ Finalizado').setStyle(ButtonStyle.Secondary).setDisabled(true)
+            );
+            await msg.edit({ embeds: [embedFinal], components: [rowFinalizado] }).catch(() => {});
+            if (sorteoActual.ganadores.length > 0) {
+                const mencionesList = sorteoActual.ganadores.map(id => `<@${id}>`).join(', ');
+                await interaction.channel.send({
+                    content: `🎉 **¡El sorteo terminó!** ${mencionesList}\n> ¡Ganaste **${sorteoActual.premio}**! 🎁`,
+                }).catch(() => {});
+            }
+        } catch { /* canal eliminado o mensaje no disponible */ }
+    }, duracionMin * 60 * 1000);
+}
+
+// ─────────────────────────────────────────────
+//  /notificar — DM masivo a clientes
+// ─────────────────────────────────────────────
+async function handleNotificar(interaction) {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+        return safeReply(interaction, { content: '🚫 Solo administradores.' });
+
+    const mensaje = interaction.options.getString('mensaje');
+    const titulo  = interaction.options.getString('titulo') ?? '📢  Mensaje de la tienda';
+    const soloActivos = interaction.options.getBoolean('solo_activos') ?? false;
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const data = loadData(interaction.guild.id);
+    let clienteIds = Object.keys(data.analytics?.porCliente ?? {});
+
+    if (soloActivos) {
+        // Solo clientes con compra en los últimos 30 días
+        const hace30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        const clientesActivos = new Set(
+            data.ventas.filter(v => v.estado !== 'cancelada' && v.timestamp >= hace30).map(v => v.clienteId)
+        );
+        clienteIds = clienteIds.filter(id => clientesActivos.has(id));
+    }
+
+    if (clienteIds.length === 0)
+        return interaction.editReply({ content: '📭 No hay clientes registrados para notificar.' });
+
+    const embedNotif = new EmbedBuilder()
+        .setColor('#5865F2')
+        .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
+        .setTitle(titulo)
+        .setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
+        .setDescription(
+            `${mensaje}\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `*Este es un mensaje oficial de **${interaction.guild.name}**.*`
+        )
+        .setFooter({ text: `${interaction.guild.name} · powered by Aurex` })
+        .setTimestamp();
+
+    let enviados = 0, fallidos = 0;
+    const LOTE = 5; // Enviar de a 5 para no saturar la RAM
+    for (let i = 0; i < clienteIds.length; i += LOTE) {
+        const lote = clienteIds.slice(i, i + LOTE);
+        await Promise.all(lote.map(async (id) => {
+            try {
+                const miembro = interaction.guild.members.cache.get(id) ?? await interaction.guild.members.fetch(id).catch(() => null);
+                if (!miembro) { fallidos++; return; }
+                const ok = await enviarDM(miembro.user, embedNotif);
+                ok ? enviados++ : fallidos++;
+            } catch { fallidos++; }
+        }));
+        // Pequeña pausa entre lotes para no abusar del rate limit
+        if (i + LOTE < clienteIds.length) await new Promise(r => setTimeout(r, 1000));
+    }
+
+    return interaction.editReply({ content: '', embeds: [
+        new EmbedBuilder().setColor('#57F287').setTitle('📬  Notificación enviada')
+            .setDescription(
+                `> ✅  **Enviados:**  \`${enviados}\`\n` +
+                `> ❌  **Fallidos:**  \`${fallidos}\` *(DMs bloqueados)*\n` +
+                `> 👥  **Total:**     \`${clienteIds.length}\`\n\n` +
+                `> *Filtro activos: \`${soloActivos ? 'Sí (últimos 30 días)' : 'No (todos los clientes)'}\`*`
+            ).setTimestamp()
+    ] });
+}
+
+// ─────────────────────────────────────────────
+//  /factura — comprobante por DM
+// ─────────────────────────────────────────────
+async function handleFactura(interaction) {
+    const ordenId = interaction.options.getInteger('orden');
+    const data = loadData(interaction.guild.id);
+    const venta = data.ventas.find(v => v.id === ordenId);
+
+    if (!venta) return safeReply(interaction, { content: `⚠️ No existe la orden \`#${ordenId}\`.` });
+    if (venta.estado === 'cancelada') return safeReply(interaction, { content: `⚠️ La orden \`#${ordenId}\` fue cancelada.` });
+
+    // Solo el cliente o un admin/staff pueden solicitar la factura
+    const esAdmin = interaction.member.permissions.has(PermissionFlagsBits.ManageMessages);
+    if (interaction.user.id !== venta.clienteId && !esAdmin)
+        return safeReply(interaction, { content: '🚫 Solo el cliente de la orden o un administrador puede solicitar la factura.' });
+
+    const resena = data.resenas?.find(r => r.ordenId === ordenId);
+    const tierCliente = getTier(data.analytics?.porCliente?.[venta.clienteId]?.compras ?? 0);
+    const totalComprasCliente = data.analytics?.porCliente?.[venta.clienteId]?.compras ?? 0;
+
+    const embedFactura = new EmbedBuilder()
+        .setColor('#57F287')
+        .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
+        .setTitle(`🧾  Factura — Orden \`#${ordenId}\``)
+        .setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
+        .setDescription(
+            `**📋 Detalles del pedido**\n` +
+            `> 🔖  **Orden #:**   \`${venta.id}\`\n` +
+            `> 📦  **Producto:**  \`${venta.producto}\`\n` +
+            `> 💎  **Cantidad:**  \`${formatRobux(venta.robux)}\`\n` +
+            `> 💵  **Precio:**    \`${venta.precio ?? 'No especificado'}\`\n` +
+            `> 💳  **Método:**    \`${venta.metodo}\`\n` +
+            `> 📅  **Fecha:**     \`${new Date(venta.timestamp).toLocaleString('es-MX')}\`\n` +
+            `> 🔰  **Estado:**    \`${venta.estado === 'completada' ? '✅ Completada' : venta.estado}\`\n\n` +
+            `**👤 Datos del cliente**\n` +
+            `> 🏷️  **Usuario:**   <@${venta.clienteId}>\n` +
+            `> 🛒  **Compras tot.:** \`${totalComprasCliente}\`\n` +
+            `> 🎖️  **Tier:**      \`${tierCliente ? `${tierCliente.emoji} ${tierCliente.label}` : 'Sin tier'}\`\n\n` +
+            `**🤝 Operador**\n` +
+            `> <@${venta.vendedorId}> — \`${venta.vendedorTag}\`\n\n` +
+            (resena ? `**⭐ Reseña**\n> ${estrellas(resena.estrellas)}${resena.comentario ? ` *"${resena.comentario}"*` : ''}\n\n` : '') +
+            `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `*Guarda este comprobante para cualquier consulta futura.*`
+        )
+        .setImage(BANNER_URL)
+        .setFooter({ text: `${interaction.guild.name} · powered by Aurex · Factura generada el ${today()}` })
+        .setTimestamp(venta.timestamp);
+
+    try {
+        const clienteUser = await interaction.client.users.fetch(venta.clienteId).catch(() => null);
+        if (clienteUser) {
+            const ok = await enviarDM(clienteUser, embedFactura);
+            return safeReply(interaction, { content: ok
+                ? `✅ Factura de la orden \`#${ordenId}\` enviada por DM a <@${venta.clienteId}>.`
+                : `⚠️ No se pudo enviar el DM a <@${venta.clienteId}>. Tiene los DMs desactivados.`
+            });
+        }
+    } catch { /* fallthrough */ }
+    return safeReply(interaction, { content: `⚠️ No se encontró al usuario cliente.` });
+}
+
+// ─────────────────────────────────────────────
+//  /servidor-stats — tarjeta completa
+// ─────────────────────────────────────────────
+async function handleServidorStats(interaction) {
+    await interaction.deferReply();
+    const data   = loadData(interaction.guild.id);
+    const tdata  = loadTickets(interaction.guild.id);
+
+    const ventasActivas = data.ventas.filter(v => v.estado !== 'cancelada');
+    const clientesUnicos = new Set(ventasActivas.map(v => v.clienteId)).size;
+    const operadoresUnicos = new Set(ventasActivas.map(v => v.vendedorId)).size;
+    const ticketsCerrados = tdata.tickets.filter(t => t.estado === 'cerrado').length;
+    const ticketsAbiertos = tdata.tickets.filter(t => t.estado === 'abierto').length;
+    const totalResenas = data.resenas?.length ?? 0;
+    const promedioResenas = totalResenas > 0
+        ? (data.resenas.reduce((s, r) => s + r.estrellas, 0) / totalResenas).toFixed(1)
+        : null;
+
+    // Top vendedor y cliente
+    const topV = Object.entries(data.analytics.porVendedor ?? {}).sort((a, b) => b[1].ventas - a[1].ventas)[0];
+    const topC = Object.entries(data.analytics.porCliente ?? {}).sort((a, b) => b[1].compras - a[1].compras)[0];
+
+    // Rangos
+    const hoy    = ventasPorRango(ventasActivas, 'hoy');
+    const semana = ventasPorRango(ventasActivas, 'semana');
+    const mes    = ventasPorRango(ventasActivas, 'mes');
+
+    // Distribución de tiers
+    const tierConteo = { bronce: 0, plata: 0, oro: 0, vip: 0 };
+    for (const [, c] of Object.entries(data.analytics.porCliente ?? {})) {
+        const t = getTier(c.compras ?? 0);
+        if (t) tierConteo[t.nombre]++;
+    }
+
+    const embed = new EmbedBuilder()
+        .setColor('#5865F2')
+        .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
+        .setTitle('🏪  Estadísticas del Servidor')
+        .setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
+        .setDescription(
+            `**📦 Pedidos**\n` +
+            `> 🌅  **Hoy:**         \`${hoy.length}\` — \`${formatRobux(hoy.reduce((s, v) => s + v.robux, 0))}\`\n` +
+            `> 📅  **Esta semana:** \`${semana.length}\` — \`${formatRobux(semana.reduce((s, v) => s + v.robux, 0))}\`\n` +
+            `> 🗓️  **Este mes:**    \`${mes.length}\` — \`${formatRobux(mes.reduce((s, v) => s + v.robux, 0))}\`\n` +
+            `> 📊  **Histórico:**   \`${ventasActivas.length}\` pedidos — \`${formatRobux(data.analytics.totalRobux)}\`\n\n` +
+            `**👥 Comunidad**\n` +
+            `> 🧑‍💼  **Clientes únicos:**   \`${clientesUnicos}\`\n` +
+            `> 🤝  **Operadores activos:** \`${operadoresUnicos}\`\n` +
+            `> 🎟️  **Tickets cerrados:**  \`${ticketsCerrados}\`\n` +
+            `> 📂  **Tickets abiertos:**  \`${ticketsAbiertos}\`\n` +
+            (promedioResenas ? `> ⭐  **Valoración promedio:** \`${promedioResenas}/5\` *(${totalResenas} reseñas)*\n` : '') +
+            `\n**🎖️ Distribución de Tiers**\n` +
+            `> 🥉 Bronce: \`${tierConteo.bronce}\`  🥈 Plata: \`${tierConteo.plata}\`  🥇 Oro: \`${tierConteo.oro}\`  💎 VIP: \`${tierConteo.vip}\`\n\n` +
+            `**🏆 Destacados**\n` +
+            `> 👑  **Top operador:** ${topV ? `<@${topV[0]}> (\`${topV[1].ventas}\` pedidos)` : '`Sin datos`'}\n` +
+            `> 🛒  **Top cliente:**  ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}`
+        )
+        .setImage(BANNER_URL)
+        .setFooter({ text: `Aurex · Generado el ${today()}` })
+        .setTimestamp();
+
+    return interaction.editReply({ embeds: [embed] });
+}
+
+// ─────────────────────────────────────────────
+//  RECORDATORIO — intervalo interno (cada 5 min)
+//  Si un ticket lleva >60 min sin respuesta de staff, menciona al staff
+// ─────────────────────────────────────────────
+async function verificarRecordatorios() {
+    const LIMITE_MS = 60 * 60 * 1000; // 60 minutos
+    const ahora = Date.now();
+
+    for (const guild of client.guilds.cache.values()) {
+        try {
+            const tdata = loadTickets(guild.id);
+            if (!tdata.config.staffRoleId) continue;
+
+            const ticketsAbiertos = tdata.tickets.filter(t => t.estado === 'abierto');
+            let guardado = false;
+
+            for (const ticket of ticketsAbiertos) {
+                const ultimaActividad = ticket.ultimaActividad ?? ticket.timestamp;
+                const sinRespuesta = ahora - ultimaActividad;
+
+                if (sinRespuesta >= LIMITE_MS && !ticket.recordatorioEnviado) {
+                    try {
+                        const canal = guild.channels.cache.get(ticket.channelId)
+                            ?? await guild.channels.fetch(ticket.channelId).catch(() => null);
+                        if (!canal) continue;
+
+                        const cat = CATEGORIAS[ticket.categoria] ?? { emoji: '🎫', label: 'Ticket' };
+                        await canal.send({
+                            content: `<@&${tdata.config.staffRoleId}>`,
+                            embeds: [new EmbedBuilder()
+                                .setColor('#ED4245')
+                                .setTitle('⏰  Recordatorio — Ticket sin respuesta')
+                                .setDescription(
+                                    `> ${cat.emoji}  **Ticket #${ticket.id}** (${cat.label})\n` +
+                                    `> 👤  **Usuario:** <@${ticket.userId}>\n` +
+                                    `> ⏱️  **Sin respuesta hace:** \`${tiempoRelativo(sinRespuesta)}\`\n\n` +
+                                    `> *Por favor, atiende este ticket lo antes posible.*`
+                                )
+                                .setFooter({ text: 'Aurex · Recordatorio automático' })
+                                .setTimestamp()
+                            ]
+                        });
+
+                        ticket.recordatorioEnviado = true;
+                        guardado = true;
+                        console.log(`🔔 Recordatorio ticket #${ticket.id} → ${guild.name}`);
+                    } catch (err) {
+                        console.warn(`⚠️ Recordatorio ticket #${ticket.id}:`, err?.message);
+                    }
+                }
+            }
+
+            if (guardado) saveTickets(guild.id, tdata);
+        } catch (err) {
+            console.warn(`⚠️ [recordatorio] ${guild.name}:`, err?.message);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────
+//  Actualizar ultimaActividad cuando hay mensajes en tickets
+// ─────────────────────────────────────────────
+function actualizarActividadTicket(guildId, channelId) {
+    try {
+        const tdata = loadTickets(guildId);
+        const ticket = tdata.tickets.find(t => t.channelId === channelId && t.estado === 'abierto');
+        if (!ticket) return;
+        ticket.ultimaActividad = Date.now();
+        // Resetear recordatorio si el staff respondió
+        ticket.recordatorioEnviado = false;
+        saveTickets(guildId, tdata);
+    } catch { /* no crítico */ }
+}
+
+// ─────────────────────────────────────────────
 //  CLIENTE
 // ─────────────────────────────────────────────
 const client = new Client({
@@ -660,6 +1122,8 @@ client.once('clientReady', () => {
     console.log(`✅ Bot listo como ${client.user.tag}`);
     client.user.setActivity('Aurex • /help 💎', { type: 3 });
     setInterval(() => console.log(`💓 Keep-alive • ${new Date().toLocaleString('es-MX')} • ${client.ws.ping}ms`), 5 * 60 * 1000);
+    // Recordatorio de tickets cada 5 minutos
+    setInterval(verificarRecordatorios, 5 * 60 * 1000);
 });
 
 // ─────────────────────────────────────────────
@@ -667,6 +1131,10 @@ client.once('clientReady', () => {
 // ─────────────────────────────────────────────
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
+
+    // Actualizar actividad del ticket si el mensaje es en un canal de ticket
+    actualizarActividadTicket(message.guild.id, message.channel.id);
+
     const data = loadData(message.guild.id);
     if (data.afk[message.author.id]) {
         const afkData = data.afk[message.author.id]; const duracion = tiempoRelativo(Date.now() - afkData.tiempo); const menciones = afkData.menciones ?? [];
@@ -714,6 +1182,14 @@ client.on('interactionCreate', async (interaction) => {
     // Stock bulk modal
     if (interaction.isModalSubmit() && interaction.customId === 'stock_bulk_modal')
         return safeHandle(interaction, () => handleStockBulkModal(interaction));
+
+    // Sorteo — participar
+    if (interaction.isButton() && interaction.customId.startsWith('sorteo_participar_'))
+        return safeHandle(interaction, () => handleSorteoParticipar(interaction, interaction.customId.replace('sorteo_participar_', '')));
+
+    // Sorteo — finalizar
+    if (interaction.isButton() && interaction.customId.startsWith('sorteo_finalizar_'))
+        return safeHandle(interaction, () => handleSorteoFinalizar(interaction, interaction.customId.replace('sorteo_finalizar_', '')));
 
     // Botones de help (categorías)
     if (interaction.isButton() && interaction.customId.startsWith('help_')) {
@@ -788,7 +1264,6 @@ client.on('interactionCreate', async (interaction) => {
         const guild = interaction.guild;
         const user  = interaction.user;
 
-        // /help — con botones por categoría estilo Nekotina
         if (interaction.commandName === 'help') {
             return interaction.reply({ embeds: [buildHelpInicio(guild)], components: buildHelpRows(), ephemeral: true });
         }
@@ -796,7 +1271,15 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.commandName === 'ping') return safeReply(interaction, { content: `🏓 Pong! \`${Math.round(client.ws.ping)}ms\`` });
         if (interaction.commandName === 'ticket-setup') return handleTicketSetup(interaction);
 
-        // /settiers — FIX: ahora muestra el estado actual aunque no se pasen roles
+        // ── NUEVOS COMANDOS ───────────────────────────────────────────────
+
+        if (interaction.commandName === 'sorteo')         return handleSorteo(interaction);
+        if (interaction.commandName === 'notificar')      return handleNotificar(interaction);
+        if (interaction.commandName === 'factura')        return handleFactura(interaction);
+        if (interaction.commandName === 'servidor-stats') return handleServidorStats(interaction);
+
+        // ─────────────────────────────────────────────────────────────────
+
         if (interaction.commandName === 'settiers') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
             const rolBronce = interaction.options.getRole('bronce');
@@ -808,7 +1291,6 @@ client.on('interactionCreate', async (interaction) => {
             if (rolPlata)  data.config.tierRoles.plata  = rolPlata.id;
             if (rolOro)    data.config.tierRoles.oro    = rolOro.id;
             if (rolVip)    data.config.tierRoles.vip    = rolVip.id;
-            // Si no se pasó ningún rol, mostrar estado actual sin guardar
             const sinCambios = !rolBronce && !rolPlata && !rolOro && !rolVip;
             if (!sinCambios) saveData(guild.id, data);
             const tr = data.config.tierRoles;
@@ -824,7 +1306,6 @@ client.on('interactionCreate', async (interaction) => {
                 .setTimestamp()] });
         }
 
-        // /vender
         if (interaction.commandName === 'vender') {
             const espera = checkCooldown(guild.id, user.id, 'vender', 10);
             if (espera > 0) return safeReply(interaction, { content: `⏳ Espera **${espera}s**.` });
@@ -858,7 +1339,6 @@ client.on('interactionCreate', async (interaction) => {
             return;
         }
 
-        // /orden
         if (interaction.commandName === 'orden') {
             const venta = data.ventas.find(v => v.id === interaction.options.getInteger('id'));
             if (!venta) return safeReply(interaction, { content: `⚠️ No existe esa orden.` });
@@ -868,7 +1348,6 @@ client.on('interactionCreate', async (interaction) => {
                 .setFooter({ text: `Estado: ${venta.estado}` }).setTimestamp(venta.timestamp)] });
         }
 
-        // /buscar
         if (interaction.commandName === 'buscar') {
             const objetivo = interaction.options.getUser('cliente');
             const ventas = data.ventas.filter(v => v.clienteId === objetivo.id && v.estado !== 'cancelada');
@@ -882,7 +1361,6 @@ client.on('interactionCreate', async (interaction) => {
                 .setFooter({ text: `Mostrando ${ultimas.length} de ${ventas.length}` }).setTimestamp()] });
         }
 
-        // /historial
         if (interaction.commandName === 'historial') {
             const rango = interaction.options.getString('rango') ?? 'todo';
             const filtroU = interaction.options.getUser('usuario');
@@ -895,7 +1373,6 @@ client.on('interactionCreate', async (interaction) => {
                 .setFooter({ text: `Últimos ${ultimas.length} de ${ventas.length}` }).setTimestamp()] });
         }
 
-        // /reseña
         if (interaction.commandName === 'reseña') {
             const ordenId = interaction.options.getInteger('orden');
             const venta = data.ventas.find(v => v.id === ordenId);
@@ -910,7 +1387,6 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.showModal(modal);
         }
 
-        // /resenas
         if (interaction.commandName === 'resenas') {
             const objetivo = interaction.options.getUser('vendedor');
             const resenas = data.resenas?.filter(r => r.vendedorId === objetivo.id) ?? [];
@@ -921,7 +1397,6 @@ client.on('interactionCreate', async (interaction) => {
                 .setFooter({ text: `Últimas ${Math.min(5, resenas.length)} de ${resenas.length}` }).setTimestamp()] });
         }
 
-        // /cancelar
         if (interaction.commandName === 'cancelar') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
             const ordenId = interaction.options.getInteger('orden');
@@ -932,7 +1407,6 @@ client.on('interactionCreate', async (interaction) => {
                 components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`cancelar_confirm_${ordenId}`).setLabel('Sí, cancelar').setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId(`cancelar_abort_${ordenId}`).setLabel('No, mantener').setStyle(ButtonStyle.Secondary))] });
         }
 
-        // /exportar
         if (interaction.commandName === 'exportar') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
             const rango = interaction.options.getString('rango') ?? 'mes';
@@ -946,7 +1420,6 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.reply({ content: `📁 **${ventas.length}** pedidos exportados:`, files: [{ attachment: Buffer.from(texto, 'utf8'), name: `pedidos-${rango}.txt` }], ephemeral: true });
         }
 
-        // /perfil
         if (interaction.commandName === 'perfil') {
             const objetivo = interaction.options.getUser('usuario');
             const comoVendedor = data.ventas.filter(v => v.vendedorId === objetivo.id && v.estado !== 'cancelada');
@@ -959,7 +1432,6 @@ client.on('interactionCreate', async (interaction) => {
                 .setFooter({ text: guild.name }).setTimestamp()] });
         }
 
-        // /stats
         if (interaction.commandName === 'stats') {
             const rango = interaction.options.getString('rango') ?? 'hoy';
             const ventas = ventasPorRango(data.ventas, rango).filter(v => v.estado !== 'cancelada');
@@ -969,7 +1441,6 @@ client.on('interactionCreate', async (interaction) => {
                 .setFooter({ text: guild.name }).setTimestamp()] });
         }
 
-        // /top
         if (interaction.commandName === 'top') {
             const tipo = interaction.options.getString('tipo') ?? 'vendedores';
             const por  = interaction.options.getString('por')  ?? 'ventas';
@@ -984,7 +1455,6 @@ client.on('interactionCreate', async (interaction) => {
             return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287').setTitle('🏆  Top operadores').setDescription(lista.map((v, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${v.id}> — \`${v.ventas}\` pedido(s) • \`${formatRobux(v.robux)}\``).join('\n')).setTimestamp()] });
         }
 
-        // /dashboard
         if (interaction.commandName === 'dashboard') {
             const hoy    = ventasPorRango(data.ventas, 'hoy').filter(v => v.estado !== 'cancelada');
             const semana = ventasPorRango(data.ventas, 'semana').filter(v => v.estado !== 'cancelada');
@@ -998,7 +1468,6 @@ client.on('interactionCreate', async (interaction) => {
                 .setFooter({ text: 'Aurex' }).setTimestamp()] });
         }
 
-        // /afk
         if (interaction.commandName === 'afk') {
             const motivo = interaction.options.getString('motivo') ?? 'Sin motivo';
             data.afk[user.id] = { motivo, tiempo: Date.now(), menciones: [] };
@@ -1006,7 +1475,6 @@ client.on('interactionCreate', async (interaction) => {
             return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#3498DB').setDescription(`### 💤  AFK activado\n\n> **${user.username}** — *${motivo}*`)] });
         }
 
-        // /anuncio
         if (interaction.commandName === 'anuncio') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
             const embed = new EmbedBuilder().setColor('#ED4245').setTitle(`📢  ${interaction.options.getString('titulo')}`).setDescription(interaction.options.getString('mensaje')).setFooter({ text: `Anuncio por ${user.tag} · Aurex` }).setTimestamp();
@@ -1017,7 +1485,6 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.channel.send(opts).catch(() => {});
         }
 
-        // /clear
         if (interaction.commandName === 'clear') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
             const cantidad = interaction.options.getInteger('cantidad');
@@ -1026,7 +1493,6 @@ client.on('interactionCreate', async (interaction) => {
             return safeReply(interaction, { content: `🗑️ **${deleted?.size ?? 0}** mensaje(s) eliminados.` });
         }
 
-        // /setlog
         if (interaction.commandName === 'setlog') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
             data.config.logChannelId = interaction.options.getChannel('canal').id;
@@ -1034,7 +1500,6 @@ client.on('interactionCreate', async (interaction) => {
             return safeReply(interaction, { content: `✅ Canal de logs: <#${data.config.logChannelId}>` });
         }
 
-        // /setresenas
         if (interaction.commandName === 'setresenas') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
             data.config.resenaChannelId = interaction.options.getChannel('canal').id;
@@ -1042,7 +1507,6 @@ client.on('interactionCreate', async (interaction) => {
             return safeReply(interaction, { content: `✅ Canal de reseñas: <#${data.config.resenaChannelId}>` });
         }
 
-        // /configdm
         if (interaction.commandName === 'configdm') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
             data.config.dmEnabled = interaction.options.getBoolean('estado');
@@ -1050,7 +1514,6 @@ client.on('interactionCreate', async (interaction) => {
             return safeReply(interaction, { content: `✅ DMs: **${data.config.dmEnabled ? 'activados ✅' : 'desactivados ❌'}**` });
         }
 
-        // /setdm
         if (interaction.commandName === 'setdm') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
             const texto = interaction.options.getString('texto');
@@ -1059,7 +1522,6 @@ client.on('interactionCreate', async (interaction) => {
             return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287').setTitle('✅  Mensaje de cierre actualizado').setDescription(`> ${texto.replace(/\n/g, '\n> ')}\n\n*Variables: \`{usuario}\` \`{servidor}\`*`)] });
         }
 
-        // /stock
         if (interaction.commandName === 'stock') {
             const stock = data.stock ?? [];
             if (stock.length === 0) return safeReply(interaction, { content: '📭 El stock está vacío.' });
@@ -1067,7 +1529,6 @@ client.on('interactionCreate', async (interaction) => {
             return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle('📦  Stock disponible').setDescription(lineas).setFooter({ text: `${stock.length} ítem(s) • ${guild.name} · Aurex` }).setTimestamp()] });
         }
 
-        // /stock-admin
         if (interaction.commandName === 'stock-admin') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
             const accion = interaction.options.getString('accion'); const nombre = interaction.options.getString('nombre');
@@ -1079,7 +1540,6 @@ client.on('interactionCreate', async (interaction) => {
             if (accion === 'limpiar') { data.stock = []; saveData(guild.id, data); return safeReply(interaction, { content: '🗑️ Stock limpiado.' }); }
         }
 
-        // /stock-bulk — abre modal
         if (interaction.commandName === 'stock-bulk') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
             const modal = new ModalBuilder().setCustomId('stock_bulk_modal').setTitle('📦 Carga masiva de stock');
