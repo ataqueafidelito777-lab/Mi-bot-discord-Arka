@@ -107,7 +107,7 @@ const commands = [
         options: [
             {
                 name: 'items', type: ApplicationCommandOptionType.String, required: true,
-                description: 'Un ítem por línea: Nombre | cantidad | precio | notas  (precio y notas opcionales)'
+                description: 'Un ítem por línea: Nombre | cantidad | precio | notas'
             },
             {
                 name: 'modo', type: ApplicationCommandOptionType.String, required: false,
@@ -226,28 +226,31 @@ const commands = [
         name: 'anuncio',
         description: 'Envía un anuncio con embed al canal actual.',
         options: [
-            { name: 'titulo',       type: ApplicationCommandOptionType.String, description: 'Título del anuncio',          required: true  },
-            { name: 'mensaje',      type: ApplicationCommandOptionType.String, description: 'Cuerpo del anuncio',          required: true  },
-            { name: 'texto_boton',  type: ApplicationCommandOptionType.String, description: 'Texto del botón (opcional)',  required: false },
-            { name: 'enlace_boton', type: ApplicationCommandOptionType.String, description: 'URL del botón (https://...)', required: false }
+            { name: 'titulo',       type: ApplicationCommandOptionType.String, description: 'Título del anuncio',                required: true  },
+            { name: 'mensaje',      type: ApplicationCommandOptionType.String, description: 'Cuerpo del anuncio',                required: true  },
+            { name: 'imagen',       type: ApplicationCommandOptionType.String, description: 'URL de imagen para el anuncio (https://...)', required: false },
+            { name: 'texto_boton',  type: ApplicationCommandOptionType.String, description: 'Texto del botón (opcional)',        required: false },
+            { name: 'enlace_boton', type: ApplicationCommandOptionType.String, description: 'URL del botón (https://...)',       required: false }
         ]
     },
     {
         name: 'sorteo',
-        description: 'Crea un sorteo con botón de participar. Más compras = más entradas. (Solo admins)',
+        description: 'Crea un sorteo. VIPs tienen doble entrada. (Solo admins)',
         options: [
-            { name: 'premio',     type: ApplicationCommandOptionType.String,  description: 'Premio del sorteo',                          required: true  },
-            { name: 'duracion',   type: ApplicationCommandOptionType.Integer, description: 'Duración en minutos (por defecto 60)',        required: false },
-            { name: 'ganadores',  type: ApplicationCommandOptionType.Integer, description: 'Cantidad de ganadores (por defecto 1)',       required: false }
+            { name: 'premio',    type: ApplicationCommandOptionType.String,  description: 'Premio del sorteo',                   required: true  },
+            { name: 'duracion',  type: ApplicationCommandOptionType.Integer, description: 'Duración en minutos (por defecto 60)', required: false },
+            { name: 'ganadores', type: ApplicationCommandOptionType.Integer, description: 'Cantidad de ganadores (por defecto 1)',required: false },
+            { name: 'imagen',    type: ApplicationCommandOptionType.String,  description: 'URL de imagen personalizada (https://...)', required: false }
         ]
     },
     {
         name: 'notificar',
-        description: 'Envía un DM masivo a todos los clientes registrados del servidor. (Solo admins)',
+        description: 'Envía un DM masivo a todos los clientes registrados. (Solo admins)',
         options: [
-            { name: 'mensaje',       type: ApplicationCommandOptionType.String,  description: 'Cuerpo del mensaje a enviar',                          required: true  },
-            { name: 'titulo',        type: ApplicationCommandOptionType.String,  description: 'Título del embed (opcional)',                          required: false },
-            { name: 'solo_activos',  type: ApplicationCommandOptionType.Boolean, description: 'Solo clientes con compra en los últimos 30 días',      required: false }
+            { name: 'mensaje',      type: ApplicationCommandOptionType.String,  description: 'Cuerpo del mensaje',                          required: true  },
+            { name: 'titulo',       type: ApplicationCommandOptionType.String,  description: 'Título del embed (opcional)',                  required: false },
+            { name: 'imagen',       type: ApplicationCommandOptionType.String,  description: 'URL de imagen para el DM (https://...)',       required: false },
+            { name: 'solo_activos', type: ApplicationCommandOptionType.Boolean, description: 'Solo clientes activos en los últimos 30 días', required: false }
         ]
     },
     {
@@ -294,7 +297,7 @@ const commands = [
         options: [
             {
                 name: 'texto', type: ApplicationCommandOptionType.String,
-                description: 'Mensaje personalizado. Usa {usuario} y {servidor} como variables.',
+                description: 'Mensaje personalizado. Variables: {usuario} {servidor}',
                 required: true
             }
         ]
@@ -307,6 +310,17 @@ const commands = [
             { name: 'plata',  type: ApplicationCommandOptionType.Role, description: 'Rol para Plata (5+ compras)',  required: false },
             { name: 'oro',    type: ApplicationCommandOptionType.Role, description: 'Rol para Oro (10+ compras)',   required: false },
             { name: 'vip',    type: ApplicationCommandOptionType.Role, description: 'Rol para VIP (20+ compras)',   required: false }
+        ]
+    },
+    {
+        name: 'setvip',
+        description: 'Define el rol VIP para doble entrada en sorteos (solo admins).',
+        options: [
+            {
+                name: 'rol', type: ApplicationCommandOptionType.Role,
+                description: 'Rol que otorga doble entrada en sorteos',
+                required: true
+            }
         ]
     }
 ];

@@ -10,6 +10,26 @@ require('dotenv').config();
 
 const BANNER_URL = 'https://i.imgur.com/RHLSmgM.png';
 
+// ─────────────────────────────────────────────
+//  EMOJIS PERSONALIZADOS
+// ─────────────────────────────────────────────
+const E = {
+    reloj:    '<:Aurex_Reloj:1513372785727111278>',
+    cerebro:  '<:Aurex_AiCerebro:1513372643728949278>',
+    invoice:  '<:Aurex_Invoicemalhechoxd:1513372495695183872>',
+    export:   '<:Aurex_Export:1513372369849290782>',
+    settings: '<:Aurex_Settings:1513371533161005177>',
+    roles:    '<:Aurex_Roles:1513371413254508675>',
+    orders:   '<:Aurex_Orders:1513363677569486999>',
+    analytics:'<:Aurex_Analytics:1513363579703787621>',
+    review:   '<:Aurex_Review:1513362468133535764>',
+    stats:    '<:Aurex_Stats:1513362232275243112>',
+    stock:    '<:Aurex_Stock:1513361977219612745>',
+    bot:      '<:Aurex_Bot:1513350718248058991>',
+    money:    '<:Aurex_Money:1513350564094804032>',
+    ticket:   '<:Aurex_Ticket:1513350401850871819>',
+};
+
 const TIER_UMBRALES = [
     { nombre: 'bronce', minCompras: 1,  emoji: '🥉', label: 'Bronce' },
     { nombre: 'plata',  minCompras: 5,  emoji: '🥈', label: 'Plata'  },
@@ -38,7 +58,7 @@ function saveData(guildId, data) {
 function defaultData() {
     return {
         ventas: [], resenas: [],
-        config: { logChannelId: null, dmEnabled: true, resenaChannelId: null, dmCierreTexto: null, tierRoles: {} },
+        config: { logChannelId: null, dmEnabled: true, resenaChannelId: null, dmCierreTexto: null, tierRoles: {}, vipRoleId: null },
         afk: {}, stock: [],
         analytics: { totalVentas: 0, totalRobux: 0, porVendedor: {}, porCliente: {} },
         sorteos: []
@@ -63,23 +83,23 @@ function defaultTickets() {
 }
 
 // ─────────────────────────────────────────────
-//  MANEJO GLOBAL DE ERRORES — 3 capas
+//  MANEJO GLOBAL DE ERRORES
 // ─────────────────────────────────────────────
 process.on('unhandledRejection', (err) => {
-    if (err?.code === 10062) return;
+    if (err?.code === 10062 || err?.code === 40060) return;
     console.error('❌ [unhandledRejection]', err?.message ?? err);
 });
 process.on('uncaughtException', (err) => {
-    if (err?.code === 10062 || err?.message?.includes('Unknown interaction')) return;
+    if (err?.code === 10062 || err?.code === 40060 || err?.message?.includes('Unknown interaction')) return;
     console.error('❌ [uncaughtException]', err?.message ?? err);
 });
 process.on('uncaughtExceptionMonitor', (err) => {
-    if (err?.code === 10062) return;
+    if (err?.code === 10062 || err?.code === 40060) return;
     console.error('❌ [uncaughtExceptionMonitor]', err?.message ?? err);
 });
 
 // ─────────────────────────────────────────────
-//  SAFE REPLY + SAFE HANDLE
+//  SAFE REPLY — nunca falla el proceso
 // ─────────────────────────────────────────────
 async function safeReply(interaction, opts) {
     try {
@@ -87,15 +107,31 @@ async function safeReply(interaction, opts) {
         if (interaction.deferred) return await interaction.editReply(opts);
         return await interaction.reply({ ...opts, ephemeral: true });
     } catch (e) {
-        if (e?.code === 10062) return;
+        if (e?.code === 10062 || e?.code === 40060) return;
         console.warn('⚠️ [safeReply]', e?.message);
     }
 }
+
+// ─────────────────────────────────────────────
+//  SAFE DEFER — defer con timeout guard (CRÍTICO para hosts lentos)
+// ─────────────────────────────────────────────
+async function safeDefer(interaction, ephemeral = false) {
+    if (interaction.deferred || interaction.replied) return true;
+    try {
+        await interaction.deferReply({ ephemeral });
+        return true;
+    } catch (e) {
+        if (e?.code === 10062 || e?.code === 40060) return false;
+        console.warn('⚠️ [safeDefer]', e?.message);
+        return false;
+    }
+}
+
 async function safeHandle(interaction, fn) {
     try {
         await fn();
     } catch (err) {
-        if (err?.code === 10062 || err?.message?.includes('Unknown interaction')) return;
+        if (err?.code === 10062 || err?.code === 40060 || err?.message?.includes('Unknown interaction')) return;
         console.error(`❌ [safeHandle] ${interaction.commandName ?? interaction.customId ?? '?'}:`, err?.message ?? err);
         const esFaltaPermisos = err?.code === 50013 || err?.message?.toLowerCase().includes('missing permissions') || err?.message?.toLowerCase().includes('missing access');
         await safeReply(interaction, {
@@ -161,6 +197,12 @@ function getTier(compras) {
     return tier;
 }
 
+// Verifica si un miembro tiene el rol VIP configurado
+function esClienteVip(miembro, vipRoleId) {
+    if (!vipRoleId || !miembro) return false;
+    return miembro.roles.cache.has(vipRoleId);
+}
+
 // ─────────────────────────────────────────────
 //  TIERS — asignar rol automático
 // ─────────────────────────────────────────────
@@ -185,7 +227,7 @@ async function actualizarTier(guild, userId, comprasTotal, tierRoles) {
 }
 
 // ─────────────────────────────────────────────
-//  DM ESTILO SHARKIE — embed rico con imagen
+//  DM helper
 // ─────────────────────────────────────────────
 async function enviarDM(user, embed, extra = {}) {
     try {
@@ -201,23 +243,24 @@ async function enviarDM(user, embed, extra = {}) {
 //  EMBEDS DE VENTAS
 // ─────────────────────────────────────────────
 function buildLogEmbed(venta, n) {
-    return new EmbedBuilder().setColor('#5865F2').setTitle('🛒  Nueva orden registrada')
-        .setDescription(`> **\`#${n}\`** — ${venta.producto}\n> ━━━━━━━━━━━━━━━━━━━━━━━━\n> 💎  **Cantidad:** \`${formatRobux(venta.robux)}\`\n> 💵  **Precio:**   \`${venta.precio ?? 'No especificado'}\`\n> 💳  **Método:**   \`${venta.metodo}\`\n> ━━━━━━━━━━━━━━━━━━━━━━━━\n> 👤  **Cliente:**  <@${venta.clienteId}>\n> 🤝  **Operador:** <@${venta.vendedorId}>`)
+    return new EmbedBuilder().setColor('#5865F2')
+        .setTitle(`${E.orders}  Nueva orden registrada`)
+        .setDescription(`> **\`#${n}\`** — ${venta.producto}\n> ━━━━━━━━━━━━━━━━━━━━━━━━\n> ${E.money}  **Cantidad:** \`${formatRobux(venta.robux)}\`\n> 💵  **Precio:**   \`${venta.precio ?? 'No especificado'}\`\n> 💳  **Método:**   \`${venta.metodo}\`\n> ━━━━━━━━━━━━━━━━━━━━━━━━\n> 👤  **Cliente:**  <@${venta.clienteId}>\n> 🤝  **Operador:** <@${venta.vendedorId}>`)
         .setFooter({ text: `Aurex • ${today()}` }).setTimestamp();
 }
 function buildDMVentaEmbed(venta, n, guildName, guildIconURL) {
     return new EmbedBuilder()
         .setColor('#57F287')
         .setAuthor({ name: guildName, iconURL: guildIconURL ?? undefined })
-        .setTitle('✅  ¡Pedido confirmado!')
+        .setTitle(`✅  ¡Pedido confirmado!`)
         .setThumbnail(guildIconURL ?? null)
         .setDescription(
             `¡Hola! Tu pedido fue procesado exitosamente. 🎉\n\n` +
             `> 📦  **Producto:** \`${venta.producto}\`\n` +
-            `> 💎  **Cantidad:** \`${formatRobux(venta.robux)}\`\n` +
+            `> ${E.money}  **Cantidad:** \`${formatRobux(venta.robux)}\`\n` +
             `> 💵  **Precio:**   \`${venta.precio ?? 'No especificado'}\`\n` +
             `> 💳  **Método:**   \`${venta.metodo}\`\n` +
-            `> 🔖  **Orden #:**  \`${n}\`\n\n` +
+            `> ${E.orders}  **Orden #:**  \`${n}\`\n\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
             `*Guarda tu número de orden para cualquier consulta.*\n` +
             `*¿Problema con tu pedido? Abre un ticket de soporte.*`
@@ -226,105 +269,95 @@ function buildDMVentaEmbed(venta, n, guildName, guildIconURL) {
         .setTimestamp();
 }
 function buildVentaPublicaEmbed(venta, n) {
-    return new EmbedBuilder().setColor('#5865F2').setTitle(`🧾  Orden \`#${n}\``)
-        .setDescription(`> 📦  **Producto:** \`${venta.producto}\`\n> 💎  **Cantidad:** \`${formatRobux(venta.robux)}\`\n> 💵  **Precio:**   \`${venta.precio ?? 'No especificado'}\`\n> 💳  **Método:**   \`${venta.metodo}\`\n> ━━━━━━━━━━━━━━━━━━━━━━━━\n> 👤  **Cliente:**  <@${venta.clienteId}>\n> 🤝  **Operador:** <@${venta.vendedorId}>`)
+    return new EmbedBuilder().setColor('#5865F2')
+        .setTitle(`${E.orders}  Orden \`#${n}\``)
+        .setDescription(`> 📦  **Producto:** \`${venta.producto}\`\n> ${E.money}  **Cantidad:** \`${formatRobux(venta.robux)}\`\n> 💵  **Precio:**   \`${venta.precio ?? 'No especificado'}\`\n> 💳  **Método:**   \`${venta.metodo}\`\n> ━━━━━━━━━━━━━━━━━━━━━━━━\n> 👤  **Cliente:**  <@${venta.clienteId}>\n> 🤝  **Operador:** <@${venta.vendedorId}>`)
         .setFooter({ text: `✅ Registrado • ${today()} • Aurex` }).setTimestamp();
 }
 
 // ─────────────────────────────────────────────
-//  HELP — estilo Nekotina con botones por categoría
+//  HELP
 // ─────────────────────────────────────────────
 const HELP_CATEGORIAS = {
     pedidos: {
         emoji: '💸', label: 'Pedidos',
-        embed: () => new EmbedBuilder().setColor('#5865F2').setTitle('💸  Pedidos')
+        embed: () => new EmbedBuilder().setColor('#5865F2').setTitle(`${E.orders}  Pedidos`)
             .setDescription(
                 `> Comandos para registrar y gestionar ventas.\n\n` +
-                `**\`/vender\`**\n> Registra una nueva venta. Requiere: producto, cliente, vendedor, cantidad.\n\n` +
-                `**\`/orden [id]\`**\n> Muestra el detalle completo de una orden por su número.\n\n` +
-                `**\`/historial\`**\n> Lista los últimos pedidos. Filtra por período o usuario.\n\n` +
-                `**\`/buscar [cliente]\`**\n> Muestra todos los pedidos de un cliente específico.\n\n` +
-                `**\`/cancelar [orden]\`**\n> Cancela una orden con confirmación. *(Requiere Gestionar mensajes)*\n\n` +
-                `**\`/exportar\`**\n> Descarga un archivo .txt con los pedidos del período.\n\n` +
-                `**\`/factura [orden]\`**\n> Envía un comprobante detallado por DM al cliente de la orden.`
+                `**\`/vender\`**\n> Registra una nueva venta.\n\n` +
+                `**\`/orden [id]\`**\n> Detalle completo de una orden.\n\n` +
+                `**\`/historial\`**\n> Lista los últimos pedidos.\n\n` +
+                `**\`/buscar [cliente]\`**\n> Todos los pedidos de un cliente.\n\n` +
+                `**\`/cancelar [orden]\`**\n> Cancela una orden con confirmación.\n\n` +
+                `**\`/exportar\`**\n> Descarga un .txt con pedidos del período.\n\n` +
+                `**\`/factura [orden]\`**\n> Envía comprobante por DM al cliente.`
             ).setFooter({ text: 'Aurex • /help • Pedidos' }).setTimestamp()
     },
     analiticas: {
         emoji: '📊', label: 'Analíticas',
-        embed: () => new EmbedBuilder().setColor('#FEE75C').setTitle('📊  Analíticas')
+        embed: () => new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.analytics}  Analíticas`)
             .setDescription(
                 `> Estadísticas y métricas de tu tienda.\n\n` +
-                `**\`/stats\`**\n> Pedidos y R$ movidos hoy, esta semana o este mes.\n\n` +
-                `**\`/top\`**\n> Ranking de operadores o clientes. Ordena por ventas o R$.\n\n` +
-                `**\`/dashboard\`**\n> Resumen visual completo: pedidos, R$, top operador y cliente.\n\n` +
-                `**\`/servidor-stats\`**\n> Tarjeta completa con clientes únicos, operadores, tickets y R$ totales.\n\n` +
-                `**\`/perfil [usuario]\`**\n> Estadísticas completas de cualquier usuario: ventas, compras, tier y valoración.`
+                `**\`/stats\`**\n> Pedidos y R$ por período.\n\n` +
+                `**\`/top\`**\n> Ranking de operadores o clientes.\n\n` +
+                `**\`/dashboard\`**\n> Resumen visual completo.\n\n` +
+                `**\`/servidor-stats\`**\n> Tarjeta completa del servidor.\n\n` +
+                `**\`/perfil [usuario]\`**\n> Estadísticas completas de un usuario.`
             ).setFooter({ text: 'Aurex • /help • Analíticas' }).setTimestamp()
     },
     stock: {
         emoji: '📦', label: 'Stock',
-        embed: () => new EmbedBuilder().setColor('#57F287').setTitle('📦  Stock')
+        embed: () => new EmbedBuilder().setColor('#57F287').setTitle(`${E.stock}  Stock`)
             .setDescription(
-                `> Gestión de inventario de tu tienda.\n\n` +
-                `**\`/stock\`**\n> Muestra todos los ítems disponibles con cantidad, precio y notas.\n\n` +
-                `**\`/stock-admin [accion]\`**\n> Agrega, edita, elimina o limpia ítems uno por uno. *(Solo admins)*\n` +
-                `> Acciones: \`agregar\` \`editar\` \`eliminar\` \`limpiar\`\n\n` +
-                `**\`/stock-bulk\`**\n> Carga varios ítems de golpe desde un modal. *(Solo admins)*\n` +
-                `> Formato por línea: \`Nombre | cantidad | precio | notas\`\n` +
-                `> Precio y notas son opcionales.\n` +
-                `> Ejemplo: \`Robux 1000 | 10 | $5 USD | Entrega rápida\``
+                `> Gestión de inventario.\n\n` +
+                `**\`/stock\`**\n> Muestra ítems disponibles.\n\n` +
+                `**\`/stock-admin [accion]\`**\n> Agrega, edita, elimina o limpia ítems.\n\n` +
+                `**\`/stock-bulk\`**\n> Carga varios ítems desde un modal.\n` +
+                `> Formato: \`Nombre | cantidad | precio | notas\``
             ).setFooter({ text: 'Aurex • /help • Stock' }).setTimestamp()
     },
     reputacion: {
         emoji: '⭐', label: 'Reputación',
-        embed: () => new EmbedBuilder().setColor('#FEE75C').setTitle('⭐  Reputación')
+        embed: () => new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.review}  Reputación`)
             .setDescription(
-                `> Sistema de valoraciones para operadores.\n\n` +
-                `**\`/reseña [orden]\`**\n> Deja una calificación del 1 al 5 para una orden que realizaste.\n> Solo el cliente de la orden puede calificar.\n\n` +
-                `**\`/resenas [vendedor]\`**\n> Ver el promedio y últimas valoraciones de un operador.`
+                `> Sistema de valoraciones.\n\n` +
+                `**\`/reseña [orden]\`**\n> Califica del 1 al 5 una orden que realizaste.\n\n` +
+                `**\`/resenas [vendedor]\`**\n> Ver promedio y últimas valoraciones.`
             ).setFooter({ text: 'Aurex • /help • Reputación' }).setTimestamp()
     },
     tickets: {
         emoji: '🎫', label: 'Tickets',
-        embed: () => new EmbedBuilder().setColor('#3498DB').setTitle('🎫  Tickets')
+        embed: () => new EmbedBuilder().setColor('#3498DB').setTitle(`${E.ticket}  Tickets`)
             .setDescription(
-                `> Sistema de atención al cliente con canales privados.\n\n` +
-                `**\`/ticket-setup\`**\n> Envía el panel de tickets a un canal. *(Solo admins)*\n` +
-                `> Configura: canal, categoría, logs, rol vendedor y rol staff.\n\n` +
-                `**Tipos de ticket disponibles:**\n` +
-                `> 🛒  **Comprar** — Solicitudes de compra con datos del pedido\n` +
-                `> 🎧  **Soporte** — Dudas, problemas o inconvenientes\n` +
-                `> ⚠️  **Reporte** — Reportes de usuarios o situaciones\n` +
-                `> ℹ️  **Otros** — Cualquier otra consulta\n\n` +
-                `> ⏳ Cooldown de **10 minutos** entre tickets cerrados.\n` +
-                `> 📋 Se genera transcript automático al cerrar.\n` +
-                `> 🔔 El bot menciona al staff si un ticket lleva más de 60 min sin respuesta.`
+                `> Sistema de atención al cliente.\n\n` +
+                `**\`/ticket-setup\`**\n> Envía el panel de tickets.\n\n` +
+                `**Tipos:** 🛒 Comprar · 🎧 Soporte · ⚠️ Reporte · ℹ️ Otros\n\n` +
+                `> ⏳ Cooldown de **10 minutos** entre tickets.\n` +
+                `> 📋 Transcript automático al cerrar.\n` +
+                `> 🔔 Recordatorio al staff si hay >60 min sin respuesta.`
             ).setFooter({ text: 'Aurex • /help • Tickets' }).setTimestamp()
     },
     utilidades: {
         emoji: '🔧', label: 'Utilidades',
-        embed: () => new EmbedBuilder().setColor('#95A5A6').setTitle('🔧  Utilidades')
+        embed: () => new EmbedBuilder().setColor('#95A5A6').setTitle(`${E.bot}  Utilidades`)
             .setDescription(
-                `> Herramientas generales del bot.\n\n` +
-                `**\`/afk [motivo]\`**\n> Activa el modo AFK. El bot notifica a quienes te mencionen y registra las menciones.\n\n` +
-                `**\`/anuncio\`**\n> Envía un anuncio con embed al canal actual. Puedes agregar un botón con enlace. *(Requiere Gestionar mensajes)*\n\n` +
-                `**\`/notificar\`**\n> Envía un DM masivo a todos los clientes registrados del servidor. *(Solo admins)*\n\n` +
-                `**\`/sorteo\`**\n> Crea un sorteo con botón de participar. Clientes con más compras tienen más entradas. *(Solo admins)*\n\n` +
-                `**\`/clear [cantidad]\`**\n> Borra entre 1 y 100 mensajes del canal. *(Requiere Gestionar mensajes)*\n\n` +
-                `**\`/ping\`**\n> Muestra la latencia actual del bot.`
+                `> Herramientas generales.\n\n` +
+                `**\`/afk [motivo]\`**\n> Activa el modo AFK.\n\n` +
+                `**\`/anuncio\`**\n> Envía un anuncio con embed e imagen opcional.\n\n` +
+                `**\`/notificar\`**\n> DM masivo a clientes registrados.\n\n` +
+                `**\`/sorteo\`**\n> Crea un sorteo. VIPs tienen doble entrada.\n\n` +
+                `**\`/clear [cantidad]\`**\n> Borra hasta 100 mensajes.\n\n` +
+                `**\`/ping\`**\n> Latencia actual del bot.`
             ).setFooter({ text: 'Aurex • /help • Utilidades' }).setTimestamp()
     },
     config: {
         emoji: '⚙️', label: 'Configuración',
-        embed: () => new EmbedBuilder().setColor('#ED4245').setTitle('⚙️  Configuración')
+        embed: () => new EmbedBuilder().setColor('#ED4245').setTitle(`${E.settings}  Configuración`)
             .setDescription(
-                `> Comandos de configuración del servidor. *(Solo administradores)*\n\n` +
-                `**\`/setlog [canal]\`**\n> Define el canal donde se registran las ventas.\n\n` +
-                `**\`/setresenas [canal]\`**\n> Define el canal donde se publican las reseñas.\n\n` +
-                `**\`/configdm [true/false]\`**\n> Activa o desactiva el DM automático al comprador tras una venta.\n\n` +
-                `**\`/setdm [texto]\`**\n> Personaliza el mensaje de cierre de ticket por DM.\n> Variables disponibles: \`{usuario}\` \`{servidor}\`\n\n` +
-                `**\`/settiers\`**\n> Configura los roles que se asignan por número de compras.\n` +
-                `> 🥉 Bronce: 1+ compra · 🥈 Plata: 5+ · 🥇 Oro: 10+ · 💎 VIP: 20+`
+                `> Solo administradores.\n\n` +
+                `**\`/setlog\`** · **\`/setresenas\`** · **\`/configdm\`** · **\`/setdm\`**\n\n` +
+                `**\`/settiers\`**\n> Roles por número de compras.\n\n` +
+                `**\`/setvip [rol]\`**\n> Define el rol VIP para doble entrada en sorteos.`
             ).setFooter({ text: 'Aurex • /help • Configuración' }).setTimestamp()
     }
 };
@@ -333,16 +366,16 @@ function buildHelpInicio(guild) {
     return new EmbedBuilder()
         .setColor('#5865F2')
         .setAuthor({ name: 'Aurex Bot', iconURL: guild?.client?.user?.displayAvatarURL() ?? undefined })
-        .setTitle('📖  Panel de ayuda')
+        .setTitle(`${E.bot}  Panel de ayuda`)
         .setDescription(
             `> Bienvenido al sistema de ayuda de **Aurex**.\n> Selecciona una categoría con los botones de abajo.\n\n` +
-            `**💸 Pedidos** — Registrar y gestionar ventas\n` +
-            `**📊 Analíticas** — Stats, rankings y dashboard\n` +
-            `**📦 Stock** — Inventario de tu tienda\n` +
-            `**⭐ Reputación** — Reseñas y valoraciones\n` +
-            `**🎫 Tickets** — Sistema de atención al cliente\n` +
-            `**🔧 Utilidades** — Herramientas generales\n` +
-            `**⚙️ Configuración** — Ajustes del servidor`
+            `${E.orders} **Pedidos** — Registrar y gestionar ventas\n` +
+            `${E.analytics} **Analíticas** — Stats, rankings y dashboard\n` +
+            `${E.stock} **Stock** — Inventario de tu tienda\n` +
+            `${E.review} **Reputación** — Reseñas y valoraciones\n` +
+            `${E.ticket} **Tickets** — Atención al cliente\n` +
+            `${E.bot} **Utilidades** — Herramientas generales\n` +
+            `${E.settings} **Configuración** — Ajustes del servidor`
         )
         .setThumbnail(guild?.iconURL({ dynamic: true }) ?? null)
         .setFooter({ text: `Aurex • ${guild?.name ?? ''} · Usa los botones para navegar` })
@@ -354,27 +387,15 @@ function buildHelpRows() {
     const row1 = new ActionRowBuilder().addComponents(
         keys.slice(0, 4).map(k => {
             const cat = HELP_CATEGORIAS[k];
-            return new ButtonBuilder()
-                .setCustomId(`help_cat_${k}`)
-                .setLabel(cat.label)
-                .setEmoji(cat.emoji)
-                .setStyle(ButtonStyle.Secondary);
+            return new ButtonBuilder().setCustomId(`help_cat_${k}`).setLabel(cat.label).setEmoji(cat.emoji).setStyle(ButtonStyle.Secondary);
         })
     );
     const row2 = new ActionRowBuilder().addComponents(
         ...keys.slice(4).map(k => {
             const cat = HELP_CATEGORIAS[k];
-            return new ButtonBuilder()
-                .setCustomId(`help_cat_${k}`)
-                .setLabel(cat.label)
-                .setEmoji(cat.emoji)
-                .setStyle(ButtonStyle.Secondary);
+            return new ButtonBuilder().setCustomId(`help_cat_${k}`).setLabel(cat.label).setEmoji(cat.emoji).setStyle(ButtonStyle.Secondary);
         }),
-        new ButtonBuilder()
-            .setCustomId('help_inicio')
-            .setLabel('Inicio')
-            .setEmoji('🏠')
-            .setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId('help_inicio').setLabel('Inicio').setEmoji('🏠').setStyle(ButtonStyle.Primary)
     );
     return [row1, row2];
 }
@@ -386,32 +407,33 @@ const CATEGORIAS = {
     comprar: {
         emoji: '🛒', label: 'Comprar', descripcion: '¿Interesado en adquirir productos o servicios?',
         prefijo: 'compra', color: '#57F287',
-        bienvenida: (u) => `### 🛒  Ticket de Compra\n> ¡Hola, **${u}**! Bienvenido a tu ticket de compra.\n> Un operador te atenderá en breve.\n\n**📋 Para agilizar tu pedido, cuéntanos:**\n> 💎  ¿Qué cantidad deseas adquirir?\n> 💵  ¿Cuál es tu presupuesto?\n> 💳  ¿Cuál es tu método de pago?\n> 🌎  ¿De qué país eres?`,
+        bienvenida: (u) => `### 🛒  Ticket de Compra\n> ¡Hola, **${u}**! Bienvenido a tu ticket de compra.\n> Un operador te atenderá en breve.\n\n**📋 Para agilizar tu pedido, cuéntanos:**\n> ${E.money}  ¿Qué cantidad deseas adquirir?\n> 💵  ¿Cuál es tu presupuesto?\n> 💳  ¿Cuál es tu método de pago?\n> 🌎  ¿De qué país eres?`,
         modal: true
     },
     soporte: {
         emoji: '🎧', label: 'Soporte', descripcion: '¿Tienes una duda, problema o inconveniente?',
         prefijo: 'soporte', color: '#3498DB',
-        bienvenida: (u) => `### 🎧  Ticket de Soporte\n> ¡Hola, **${u}**! Abriste un ticket de soporte.\n> Nuestro equipo revisará tu caso lo antes posible.\n\n**📋 Para ayudarte mejor, necesitamos:**\n> ❓  ¿Qué ocurrió exactamente?\n> 🔖  ¿Tienes número de orden? *(si aplica)*\n> 📸  ¿Tienes capturas de pantalla como evidencia?`,
+        bienvenida: (u) => `### 🎧  Ticket de Soporte\n> ¡Hola, **${u}**! Abriste un ticket de soporte.\n> Nuestro equipo revisará tu caso lo antes posible.\n\n**📋 Para ayudarte mejor:**\n> ❓  ¿Qué ocurrió exactamente?\n> ${E.orders}  ¿Tienes número de orden?\n> 📸  ¿Tienes capturas de pantalla?`,
         modal: false
     },
     reporte: {
         emoji: '⚠️', label: 'Reporte', descripcion: '¿Necesitas reportar a alguien o algo?',
         prefijo: 'reporte', color: '#ED4245',
-        bienvenida: (u) => `### ⚠️  Ticket de Reporte\n> ¡Hola, **${u}**! Recibimos tu reporte.\n> El staff lo revisará con la mayor seriedad posible.\n\n**📋 Para procesar tu reporte necesitamos:**\n> 👤  Usuario reportado *(tag o ID)*\n> 📝  Motivo del reporte detallado\n> 📸  Evidencia *(capturas, videos, links)*\n> 📅  ¿Cuándo ocurrió el incidente?`,
+        bienvenida: (u) => `### ⚠️  Ticket de Reporte\n> ¡Hola, **${u}**! Recibimos tu reporte.\n> El staff lo revisará con seriedad.\n\n**📋 Necesitamos:**\n> 👤  Usuario reportado\n> 📝  Motivo detallado\n> 📸  Evidencia\n> 📅  ¿Cuándo ocurrió?`,
         modal: false
     },
     otros: {
         emoji: 'ℹ️', label: 'Otros', descripcion: '¿Otra consulta que no encaja en las opciones?',
         prefijo: 'otros', color: '#95A5A6',
-        bienvenida: (u) => `### ℹ️  Ticket General\n> ¡Hola, **${u}**! Abriste un ticket de consulta general.\n> Un miembro del staff te atenderá en breve.\n\n**📋 Para ayudarte, cuéntanos:**\n> ✏️  ¿En qué podemos ayudarte hoy?\n> 📎  Agrega cualquier detalle o archivo relevante.`,
+        bienvenida: (u) => `### ℹ️  Ticket General\n> ¡Hola, **${u}**! Abriste un ticket de consulta general.\n> Un miembro del staff te atenderá en breve.\n\n**📋 Cuéntanos:**\n> ✏️  ¿En qué podemos ayudarte hoy?`,
         modal: false
     }
 };
 
 function buildPanelEmbed(guildName) {
-    return new EmbedBuilder().setColor('#5865F2').setTitle('🎫  ¿En qué podemos ayudarte?')
-        .setDescription(`> Selecciona la opción que mejor se ajuste a tu necesidad.\n> Un miembro de nuestro equipo te atenderá en breve.\n\n**🛒  Comprar**\n> ¿Estás interesado en adquirir alguno de nuestros productos?\n\n**🎧  Soporte**\n> ¿Tienes alguna duda, inconveniente o problema?\n\n**⚠️  Reporte**\n> ¿Necesitas reportar a un usuario o situación al staff?\n\n**ℹ️  Otros**\n> ¿Otra consulta que no encaja en las opciones anteriores?`)
+    return new EmbedBuilder().setColor('#5865F2')
+        .setTitle(`${E.ticket}  ¿En qué podemos ayudarte?`)
+        .setDescription(`> Selecciona la opción que mejor se ajuste a tu necesidad.\n\n**🛒  Comprar** — Adquirir productos\n**🎧  Soporte** — Dudas o problemas\n**⚠️  Reporte** — Reportar usuarios\n**ℹ️  Otros** — Cualquier otra consulta`)
         .setImage(BANNER_URL).setFooter({ text: `${guildName} · powered by Aurex` }).setTimestamp();
 }
 function buildPanelRow() {
@@ -436,25 +458,32 @@ async function logTicket(guild, tdata, embedLog, archivo = null) {
 }
 
 // ─────────────────────────────────────────────
-//  TICKETS — SETUP
+//  TICKETS — SETUP (fix crash: reply inmediato)
 // ─────────────────────────────────────────────
 async function handleTicketSetup(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
         return safeReply(interaction, { content: '🚫 Solo administradores.' });
-    await interaction.deferReply({ ephemeral: true });
+
+    // CRÍTICO: defer ANTES de cualquier operación async larga
+    const ok = await safeDefer(interaction, true);
+    if (!ok) return; // interaction expiró, no continuar
+
     const tdata = loadTickets(interaction.guild.id);
-    const canal = interaction.options.getChannel('canal');
+    const canal           = interaction.options.getChannel('canal');
     const categoriaDiscord = interaction.options.getChannel('categoria') ?? null;
-    const logCanal    = interaction.options.getChannel('logs')      ?? null;
-    const vendedorRol = interaction.options.getRole('rol_vendedor') ?? null;
-    const staffRol    = interaction.options.getRole('rol_staff')    ?? null;
+    const logCanal         = interaction.options.getChannel('logs')      ?? null;
+    const vendedorRol      = interaction.options.getRole('rol_vendedor') ?? null;
+    const staffRol         = interaction.options.getRole('rol_staff')    ?? null;
+
     tdata.config.categoryId     = categoriaDiscord?.id ?? tdata.config.categoryId;
     tdata.config.logChannelId   = logCanal?.id         ?? tdata.config.logChannelId;
     tdata.config.vendedorRoleId = vendedorRol?.id      ?? tdata.config.vendedorRoleId;
     tdata.config.staffRoleId    = staffRol?.id         ?? tdata.config.staffRoleId;
+
     const embedPanel = buildPanelEmbed(interaction.guild.name);
     const rowPanel   = buildPanelRow();
     let panelActualizado = false;
+
     if (tdata.config.panelMessageId && tdata.config.panelChannelId) {
         try {
             const canalAnterior = await interaction.guild.channels.fetch(tdata.config.panelChannelId).catch(() => null);
@@ -495,7 +524,7 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
     const ticketAbierto = tdata.tickets.find(t => t.userId === user.id && t.estado === 'abierto');
     if (ticketAbierto) {
         const existe = guild.channels.cache.get(ticketAbierto.channelId) ?? await guild.channels.fetch(ticketAbierto.channelId).catch(() => null);
-        if (existe) return safeReply(interaction, { content: `⚠️ Ya tienes un ticket abierto: <#${ticketAbierto.channelId}>\nCiérralo antes de abrir uno nuevo.` });
+        if (existe) return safeReply(interaction, { content: `⚠️ Ya tienes un ticket abierto: <#${ticketAbierto.channelId}>` });
         ticketAbierto.estado = 'cerrado'; ticketAbierto.cerradoPor = 'Sistema'; ticketAbierto.cerradoAt = Date.now();
         saveTickets(guild.id, tdata);
     }
@@ -528,16 +557,16 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
     saveTickets(guild.id, tdata);
 
     let descripcion = cat.bienvenida(user.username);
-    if (datosModal) descripcion += `\n\n**📋 Datos de tu pedido:**\n> 💎  **Cantidad:**    \`${datosModal.cantidad}\`\n> 💵  **Presupuesto:** \`${datosModal.precio}\`\n> 💳  **Método:**      \`${datosModal.metodo}\``;
+    if (datosModal) descripcion += `\n\n**📋 Datos de tu pedido:**\n> ${E.money}  **Cantidad:**    \`${datosModal.cantidad}\`\n> 💵  **Presupuesto:** \`${datosModal.precio}\`\n> 💳  **Método:**      \`${datosModal.metodo}\``;
 
-    const embedBienvenida = new EmbedBuilder().setColor(cat.color).setImage(BANNER_URL).setDescription(descripcion).setFooter({ text: `Ticket #${ticketId} • ${guild.name} · Aurex` }).setTimestamp();
+    const embedBienvenida = new EmbedBuilder().setColor(cat.color).setImage(BANNER_URL).setDescription(descripcion).setFooter({ text: `${E.ticket} Ticket #${ticketId} • ${guild.name} · Aurex` }).setTimestamp();
     const rowCerrar = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`ticket_cerrar_${ticketId}`).setLabel('🔒 Cerrar ticket').setStyle(ButtonStyle.Danger));
     const menciones = [`<@${user.id}>`];
     if (categoriaKey === 'comprar' && tdata.config.vendedorRoleId) menciones.push(`<@&${tdata.config.vendedorRoleId}>`);
     else if (tdata.config.staffRoleId) menciones.push(`<@&${tdata.config.staffRoleId}>`);
 
     await canalTicket.send({ content: menciones.join(' '), embeds: [embedBienvenida], components: [rowCerrar] });
-    await logTicket(guild, tdata, new EmbedBuilder().setColor('#57F287').setTitle(`📂  Ticket #${ticketId} abierto`).setDescription(`> 👤  **Usuario:**   <@${user.id}> (\`${user.tag}\`)\n> 🗂️  **Categoría:** ${cat.emoji} \`${cat.label}\`\n> 📌  **Canal:**     <#${canalTicket.id}>`).setTimestamp());
+    await logTicket(guild, tdata, new EmbedBuilder().setColor('#57F287').setTitle(`${E.ticket}  Ticket #${ticketId} abierto`).setDescription(`> 👤  **Usuario:**   <@${user.id}> (\`${user.tag}\`)\n> 🗂️  **Categoría:** ${cat.emoji} \`${cat.label}\`\n> 📌  **Canal:**     <#${canalTicket.id}>`).setTimestamp());
     return safeReply(interaction, { content: `✅ Tu ticket fue creado: <#${canalTicket.id}>` });
 }
 
@@ -552,7 +581,10 @@ async function cerrarTicket(interaction, ticketId) {
     const esAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
     const esStaff = tdata.config.staffRoleId ? interaction.member.roles.cache.has(tdata.config.staffRoleId) : false;
     if (!esAdmin && !esStaff && interaction.user.id !== ticket.userId) return safeReply(interaction, { content: '🚫 Sin permiso para cerrar este ticket.' });
-    await interaction.deferReply();
+
+    const ok = await safeDefer(interaction);
+    if (!ok) return;
+
     const mensajes = await interaction.channel.messages.fetch({ limit: 100 });
     const cat = CATEGORIAS[ticket.categoria];
     let transcript = `TRANSCRIPT — Ticket #${ticket.id} (${cat.label})\nUsuario: ${ticket.userTag}\nCerrado por: ${interaction.user.tag}\nFecha: ${new Date().toLocaleString('es-MX')}\nDuración: ${calcDuracion(ticket.timestamp, Date.now())}\n${'─'.repeat(60)}\n\n`;
@@ -561,15 +593,16 @@ async function cerrarTicket(interaction, ticketId) {
     tdata.cooldowns[ticket.userId] = Date.now();
     ticket.estado = 'cerrado'; ticket.cerradoPor = interaction.user.tag; ticket.cerradoAt = Date.now();
     saveTickets(guild.id, tdata);
+
     await interaction.editReply({ embeds: [new EmbedBuilder().setColor('#ED4245').setTitle('🔒  Ticket cerrado').setDescription(`> Cerrado por <@${interaction.user.id}>\n> El canal se eliminará en **5 segundos**.`).setTimestamp()] });
 
     try {
         const gdata = loadData(guild.id);
-        const dmTexto = gdata.config.dmCierreTexto ?? `¡Hola, **{usuario}**! 👋\n\nEsperamos haberte atendido de la mejor manera en **{servidor}**.\n\n> *Si tuviste algún inconveniente, no dudes en abrir un nuevo ticket.*\n\n¡Gracias por confiar en nosotros! 💙`;
+        const dmTexto = gdata.config.dmCierreTexto ?? `¡Hola, **{usuario}**! 👋\n\nEsperamos haberte atendido de la mejor manera en **{servidor}**.\n\n> *Si tuviste algún inconveniente, abre un nuevo ticket.*\n\n¡Gracias por confiar en nosotros! 💙`;
         const embedDM = new EmbedBuilder()
             .setColor('#5865F2')
             .setAuthor({ name: guild.name, iconURL: guild.iconURL({ dynamic: true }) ?? undefined })
-            .setTitle('🎫  Tu ticket fue cerrado')
+            .setTitle(`${E.ticket}  Tu ticket fue cerrado`)
             .setThumbnail(guild.iconURL({ dynamic: true }) ?? null)
             .setDescription(
                 `> **Servidor:**    \`${guild.name}\`\n` +
@@ -587,7 +620,7 @@ async function cerrarTicket(interaction, ticketId) {
 
     const buffer = Buffer.from(transcript, 'utf8');
     await logTicket(guild, tdata,
-        new EmbedBuilder().setColor('#ED4245').setTitle(`📋  Ticket #${ticketId} cerrado`).setDescription(`> 👤  **Usuario:**    <@${ticket.userId}> (\`${ticket.userTag}\`)\n> 🗂️  **Categoría:**  ${cat.emoji} \`${cat.label}\`\n> 🔒  **Cerrado por:** \`${interaction.user.tag}\`\n> ⏱️  **Duración:**   \`${calcDuracion(ticket.timestamp, Date.now())}\``).setTimestamp(),
+        new EmbedBuilder().setColor('#ED4245').setTitle(`${E.ticket}  Ticket #${ticketId} cerrado`).setDescription(`> 👤  **Usuario:**    <@${ticket.userId}> (\`${ticket.userTag}\`)\n> 🗂️  **Categoría:**  ${cat.emoji} \`${cat.label}\`\n> 🔒  **Cerrado por:** \`${interaction.user.tag}\`\n> ⏱️  **Duración:**   \`${calcDuracion(ticket.timestamp, Date.now())}\``).setTimestamp(),
         { attachment: buffer, name: `transcript-ticket${ticketId}.txt` }
     );
     setTimeout(() => { interaction.channel.delete().catch(() => {}); }, 5000);
@@ -608,11 +641,11 @@ async function handleTicketInteraction(interaction) {
             );
             return interaction.showModal(modal);
         }
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
         return abrirTicket(interaction, interaction.values[0]);
     }
     if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket_modal_')) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
         return abrirTicket(interaction, interaction.customId.replace('ticket_modal_', ''), {
             cantidad: interaction.fields.getTextInputValue('cantidad'),
             precio:   interaction.fields.getTextInputValue('precio'),
@@ -624,7 +657,7 @@ async function handleTicketInteraction(interaction) {
 }
 
 // ─────────────────────────────────────────────
-//  STOCK-BULK — Modal
+//  STOCK-BULK
 // ─────────────────────────────────────────────
 async function handleStockBulkModal(interaction) {
     const texto = interaction.fields.getTextInputValue('items_texto');
@@ -650,18 +683,21 @@ async function handleStockBulkModal(interaction) {
     }
     saveData(interaction.guild.id, data);
     return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287')
-        .setTitle(`📦  Stock ${modoFinal === 'reemplazar' ? 'reemplazado' : 'actualizado'}`)
+        .setTitle(`${E.stock}  Stock ${modoFinal === 'reemplazar' ? 'reemplazado' : 'actualizado'}`)
         .setDescription(`> ✅  **${agregados.length}** ítem(s) cargados\n${modoFinal === 'reemplazar' ? '> 🔄  Stock anterior eliminado\n' : ''}${errores.length > 0 ? `> ⚠️  **${errores.length}** error(es)\n` : ''}\n**Procesados:**\n${agregados.map(n => `> \`${n}\``).join('\n')}${errores.length > 0 ? `\n\n**Errores:**\n${errores.map(e => `> ${e}`).join('\n')}` : ''}`)
         .setFooter({ text: `Stock total: ${data.stock.length} ítem(s)` }).setTimestamp()] });
 }
 
 // ─────────────────────────────────────────────
 //  SORTEO — helpers
+//  VIPs tienen DOBLE ENTRADA (base 1 + 1/5 compras, máx 10, x2 si VIP)
 // ─────────────────────────────────────────────
-function sorteoEntradas(data, userId) {
-    // Clientes con más compras tienen más entradas (base 1 + 1 por cada 5 compras, máx 10)
+function sorteoEntradas(data, userId, miembro, vipRoleId) {
     const compras = data.analytics?.porCliente?.[userId]?.compras ?? 0;
-    return Math.min(1 + Math.floor(compras / 5), 10);
+    let base = Math.min(1 + Math.floor(compras / 5), 10);
+    // Doble entrada para VIPs
+    if (esClienteVip(miembro, vipRoleId)) base = Math.min(base * 2, 20);
+    return base;
 }
 
 function buildSorteoEmbed(sorteo, guildName) {
@@ -676,23 +712,22 @@ function buildSorteoEmbed(sorteo, guildName) {
         .setTitle(`🎉  Sorteo — ${sorteo.premio}`)
         .setDescription(
             `> 🎁  **Premio:**       \`${sorteo.premio}\`\n` +
-            `> ⏰  **Tiempo:**       \`${tiempoRestante}\`\n` +
+            `> ${E.reloj}  **Tiempo:**       \`${tiempoRestante}\`\n` +
             `> 👥  **Participantes:** \`${participantes}\`\n` +
             `> 🎟️  **Entradas tot.:** \`${entradas}\`\n` +
             `> 🏆  **Ganadores:**    \`${sorteo.cantGanadores}\`\n\n` +
-            `> *Los clientes con más compras tienen más entradas.*\n` +
-            `> *Máximo 10 entradas por usuario.*\n\n` +
+            `> *Más compras = más entradas (máx. 10).*\n` +
+            `> *💎 Clientes VIP tienen el doble de entradas (máx. 20).*\n\n` +
             (terminado && sorteo.ganadores?.length
                 ? `**🏆 Ganador${sorteo.ganadores.length > 1 ? 'es' : ''}:**\n${sorteo.ganadores.map(id => `> <@${id}>`).join('\n')}`
                 : terminado ? '> *Sin participantes para elegir ganador.*' : '')
         )
-        .setImage(BANNER_URL)
+        .setImage(sorteo.imagen ?? BANNER_URL)
         .setFooter({ text: `${guildName} · Aurex · ID: ${sorteo.id}` })
         .setTimestamp();
 }
 
 function elegirGanadores(participantes, cantidad) {
-    // Construir pool pesado por entradas
     const pool = [];
     for (const p of participantes) {
         for (let i = 0; i < p.entradas; i++) pool.push(p.userId);
@@ -709,7 +744,7 @@ function elegirGanadores(participantes, cantidad) {
 }
 
 // ─────────────────────────────────────────────
-//  SORTEO — handler botón participar
+//  SORTEO — participar
 // ─────────────────────────────────────────────
 async function handleSorteoParticipar(interaction, sorteoId) {
     const data = loadData(interaction.guild.id);
@@ -722,12 +757,15 @@ async function handleSorteoParticipar(interaction, sorteoId) {
     const yaParticipa = sorteo.participantes?.find(p => p.userId === interaction.user.id);
     if (yaParticipa) return safeReply(interaction, { content: `✅ Ya estás participando con **${yaParticipa.entradas}** entrada(s). ¡Buena suerte!` });
 
-    const entradas = sorteoEntradas(data, interaction.user.id);
+    const miembro = interaction.member;
+    const vipRoleId = data.config?.vipRoleId ?? null;
+    const entradas = sorteoEntradas(data, interaction.user.id, miembro, vipRoleId);
+    const esVip = esClienteVip(miembro, vipRoleId);
+
     if (!sorteo.participantes) sorteo.participantes = [];
     sorteo.participantes.push({ userId: interaction.user.id, userTag: interaction.user.tag, entradas });
     saveData(interaction.guild.id, data);
 
-    // Actualizar embed del mensaje
     try {
         const embedActualizado = buildSorteoEmbed(sorteo, interaction.guild.name);
         const rowSorteo = new ActionRowBuilder().addComponents(
@@ -737,11 +775,13 @@ async function handleSorteoParticipar(interaction, sorteoId) {
         await interaction.message.edit({ embeds: [embedActualizado], components: [rowSorteo] }).catch(() => {});
     } catch { /* no crítico */ }
 
-    return safeReply(interaction, { content: `🎟️ ¡Participas en el sorteo con **${entradas}** entrada(s)!\n> *Más compras = más entradas (máx. 10)*` });
+    return safeReply(interaction, {
+        content: `🎟️ ¡Participas con **${entradas}** entrada(s)!${esVip ? '\n> 💎 **Bonus VIP:** Doble entradas aplicadas.' : '\n> *Más compras = más entradas (máx. 10)*'}`
+    });
 }
 
 // ─────────────────────────────────────────────
-//  SORTEO — handler botón finalizar
+//  SORTEO — finalizar
 // ─────────────────────────────────────────────
 async function handleSorteoFinalizar(interaction, sorteoId) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
@@ -777,15 +817,23 @@ async function handleSorteoFinalizar(interaction, sorteoId) {
 }
 
 // ─────────────────────────────────────────────
-//  /sorteo — comando
+//  /sorteo — comando (con imagen opcional)
 // ─────────────────────────────────────────────
 async function handleSorteo(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
         return safeReply(interaction, { content: '🚫 Solo administradores.' });
 
-    const premio       = interaction.options.getString('premio');
-    const duracionMin  = interaction.options.getInteger('duracion') ?? 60;  // minutos
+    const premio        = interaction.options.getString('premio');
+    const duracionMin   = interaction.options.getInteger('duracion') ?? 60;
     const cantGanadores = interaction.options.getInteger('ganadores') ?? 1;
+    const imagenUrl     = interaction.options.getString('imagen') ?? null;
+
+    // Validar URL de imagen si se proporcionó
+    if (imagenUrl) {
+        try { new URL(imagenUrl); } catch {
+            return safeReply(interaction, { content: '⚠️ La URL de imagen no es válida. Debe empezar con `https://`.' });
+        }
+    }
 
     const data = loadData(interaction.guild.id);
     if (!data.sorteos) data.sorteos = [];
@@ -794,19 +842,13 @@ async function handleSorteo(interaction) {
     const fin = Date.now() + duracionMin * 60 * 1000;
 
     const sorteo = {
-        id: sorteoId,
-        premio,
-        fin,
-        cantGanadores,
-        estado: 'activo',
-        participantes: [],
-        ganadores: [],
-        canalId: interaction.channelId,
-        timestamp: Date.now()
+        id: sorteoId, premio, fin, cantGanadores,
+        estado: 'activo', participantes: [], ganadores: [],
+        canalId: interaction.channelId, timestamp: Date.now(),
+        imagen: imagenUrl  // imagen personalizada o null (usa BANNER_URL por defecto)
     };
 
     data.sorteos.push(sorteo);
-    // Limpiar sorteos viejos (>7 días) para no inflar el JSON
     data.sorteos = data.sorteos.filter(s => Date.now() - s.timestamp < 7 * 24 * 60 * 60 * 1000);
     saveData(interaction.guild.id, data);
 
@@ -836,36 +878,33 @@ async function handleSorteo(interaction) {
             await msg.edit({ embeds: [embedFinal], components: [rowFinalizado] }).catch(() => {});
             if (sorteoActual.ganadores.length > 0) {
                 const mencionesList = sorteoActual.ganadores.map(id => `<@${id}>`).join(', ');
-                await interaction.channel.send({
-                    content: `🎉 **¡El sorteo terminó!** ${mencionesList}\n> ¡Ganaste **${sorteoActual.premio}**! 🎁`,
-                }).catch(() => {});
+                await interaction.channel.send({ content: `🎉 **¡El sorteo terminó!** ${mencionesList}\n> ¡Ganaste **${sorteoActual.premio}**! 🎁` }).catch(() => {});
             }
-        } catch { /* canal eliminado o mensaje no disponible */ }
+        } catch { /* canal eliminado */ }
     }, duracionMin * 60 * 1000);
 }
 
 // ─────────────────────────────────────────────
-//  /notificar — DM masivo a clientes
+//  /notificar — DM masivo
 // ─────────────────────────────────────────────
 async function handleNotificar(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
         return safeReply(interaction, { content: '🚫 Solo administradores.' });
 
-    const mensaje = interaction.options.getString('mensaje');
-    const titulo  = interaction.options.getString('titulo') ?? '📢  Mensaje de la tienda';
+    const mensaje     = interaction.options.getString('mensaje');
+    const titulo      = interaction.options.getString('titulo') ?? '📢  Mensaje de la tienda';
     const soloActivos = interaction.options.getBoolean('solo_activos') ?? false;
+    const imagenUrl   = interaction.options.getString('imagen') ?? null;
 
-    await interaction.deferReply({ ephemeral: true });
+    const ok = await safeDefer(interaction, true);
+    if (!ok) return;
 
     const data = loadData(interaction.guild.id);
     let clienteIds = Object.keys(data.analytics?.porCliente ?? {});
 
     if (soloActivos) {
-        // Solo clientes con compra en los últimos 30 días
         const hace30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
-        const clientesActivos = new Set(
-            data.ventas.filter(v => v.estado !== 'cancelada' && v.timestamp >= hace30).map(v => v.clienteId)
-        );
+        const clientesActivos = new Set(data.ventas.filter(v => v.estado !== 'cancelada' && v.timestamp >= hace30).map(v => v.clienteId));
         clienteIds = clienteIds.filter(id => clientesActivos.has(id));
     }
 
@@ -877,43 +916,39 @@ async function handleNotificar(interaction) {
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
         .setTitle(titulo)
         .setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
-        .setDescription(
-            `${mensaje}\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `*Este es un mensaje oficial de **${interaction.guild.name}**.*`
-        )
+        .setDescription(`${mensaje}\n\n━━━━━━━━━━━━━━━━━━━━━━━━\n*Este es un mensaje oficial de **${interaction.guild.name}**.*`)
         .setFooter({ text: `${interaction.guild.name} · powered by Aurex` })
         .setTimestamp();
 
+    // Agregar imagen si se proporcionó
+    if (imagenUrl) {
+        try { new URL(imagenUrl); embedNotif.setImage(imagenUrl); } catch {}
+    }
+
     let enviados = 0, fallidos = 0;
-    const LOTE = 5; // Enviar de a 5 para no saturar la RAM
+    const LOTE = 5;
     for (let i = 0; i < clienteIds.length; i += LOTE) {
         const lote = clienteIds.slice(i, i + LOTE);
         await Promise.all(lote.map(async (id) => {
             try {
                 const miembro = interaction.guild.members.cache.get(id) ?? await interaction.guild.members.fetch(id).catch(() => null);
                 if (!miembro) { fallidos++; return; }
-                const ok = await enviarDM(miembro.user, embedNotif);
-                ok ? enviados++ : fallidos++;
+                const ok2 = await enviarDM(miembro.user, embedNotif);
+                ok2 ? enviados++ : fallidos++;
             } catch { fallidos++; }
         }));
-        // Pequeña pausa entre lotes para no abusar del rate limit
         if (i + LOTE < clienteIds.length) await new Promise(r => setTimeout(r, 1000));
     }
 
     return interaction.editReply({ content: '', embeds: [
-        new EmbedBuilder().setColor('#57F287').setTitle('📬  Notificación enviada')
-            .setDescription(
-                `> ✅  **Enviados:**  \`${enviados}\`\n` +
-                `> ❌  **Fallidos:**  \`${fallidos}\` *(DMs bloqueados)*\n` +
-                `> 👥  **Total:**     \`${clienteIds.length}\`\n\n` +
-                `> *Filtro activos: \`${soloActivos ? 'Sí (últimos 30 días)' : 'No (todos los clientes)'}\`*`
-            ).setTimestamp()
+        new EmbedBuilder().setColor('#57F287').setTitle(`${E.bot}  Notificación enviada`)
+            .setDescription(`> ✅  **Enviados:**  \`${enviados}\`\n> ❌  **Fallidos:**  \`${fallidos}\`\n> 👥  **Total:**     \`${clienteIds.length}\`\n\n> *Filtro activos: \`${soloActivos ? 'Sí (últimos 30 días)' : 'No'}\`*`)
+            .setTimestamp()
     ] });
 }
 
 // ─────────────────────────────────────────────
-//  /factura — comprobante por DM
+//  /factura
 // ─────────────────────────────────────────────
 async function handleFactura(interaction) {
     const ordenId = interaction.options.getInteger('orden');
@@ -923,10 +958,9 @@ async function handleFactura(interaction) {
     if (!venta) return safeReply(interaction, { content: `⚠️ No existe la orden \`#${ordenId}\`.` });
     if (venta.estado === 'cancelada') return safeReply(interaction, { content: `⚠️ La orden \`#${ordenId}\` fue cancelada.` });
 
-    // Solo el cliente o un admin/staff pueden solicitar la factura
     const esAdmin = interaction.member.permissions.has(PermissionFlagsBits.ManageMessages);
     if (interaction.user.id !== venta.clienteId && !esAdmin)
-        return safeReply(interaction, { content: '🚫 Solo el cliente de la orden o un administrador puede solicitar la factura.' });
+        return safeReply(interaction, { content: '🚫 Solo el cliente o un administrador puede solicitar la factura.' });
 
     const resena = data.resenas?.find(r => r.ordenId === ordenId);
     const tierCliente = getTier(data.analytics?.porCliente?.[venta.clienteId]?.compras ?? 0);
@@ -935,29 +969,26 @@ async function handleFactura(interaction) {
     const embedFactura = new EmbedBuilder()
         .setColor('#57F287')
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
-        .setTitle(`🧾  Factura — Orden \`#${ordenId}\``)
+        .setTitle(`${E.invoice}  Factura — Orden \`#${ordenId}\``)
         .setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
         .setDescription(
             `**📋 Detalles del pedido**\n` +
-            `> 🔖  **Orden #:**   \`${venta.id}\`\n` +
+            `> ${E.orders}  **Orden #:**   \`${venta.id}\`\n` +
             `> 📦  **Producto:**  \`${venta.producto}\`\n` +
-            `> 💎  **Cantidad:**  \`${formatRobux(venta.robux)}\`\n` +
+            `> ${E.money}  **Cantidad:**  \`${formatRobux(venta.robux)}\`\n` +
             `> 💵  **Precio:**    \`${venta.precio ?? 'No especificado'}\`\n` +
             `> 💳  **Método:**    \`${venta.metodo}\`\n` +
-            `> 📅  **Fecha:**     \`${new Date(venta.timestamp).toLocaleString('es-MX')}\`\n` +
-            `> 🔰  **Estado:**    \`${venta.estado === 'completada' ? '✅ Completada' : venta.estado}\`\n\n` +
-            `**👤 Datos del cliente**\n` +
-            `> 🏷️  **Usuario:**   <@${venta.clienteId}>\n` +
-            `> 🛒  **Compras tot.:** \`${totalComprasCliente}\`\n` +
-            `> 🎖️  **Tier:**      \`${tierCliente ? `${tierCliente.emoji} ${tierCliente.label}` : 'Sin tier'}\`\n\n` +
-            `**🤝 Operador**\n` +
-            `> <@${venta.vendedorId}> — \`${venta.vendedorTag}\`\n\n` +
-            (resena ? `**⭐ Reseña**\n> ${estrellas(resena.estrellas)}${resena.comentario ? ` *"${resena.comentario}"*` : ''}\n\n` : '') +
-            `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `*Guarda este comprobante para cualquier consulta futura.*`
+            `> 📅  **Fecha:**     \`${new Date(venta.timestamp).toLocaleString('es-MX')}\`\n\n` +
+            `**👤 Cliente**\n` +
+            `> 🏷️  <@${venta.clienteId}>\n` +
+            `> 🛒  **Compras:** \`${totalComprasCliente}\`\n` +
+            `> 🎖️  **Tier:** \`${tierCliente ? `${tierCliente.emoji} ${tierCliente.label}` : 'Sin tier'}\`\n\n` +
+            `**🤝 Operador**\n> <@${venta.vendedorId}> — \`${venta.vendedorTag}\`\n\n` +
+            (resena ? `**${E.review} Reseña**\n> ${estrellas(resena.estrellas)}${resena.comentario ? ` *"${resena.comentario}"*` : ''}\n\n` : '') +
+            `━━━━━━━━━━━━━━━━━━━━━━━━\n*Guarda este comprobante para consultas futuras.*`
         )
         .setImage(BANNER_URL)
-        .setFooter({ text: `${interaction.guild.name} · powered by Aurex · Factura generada el ${today()}` })
+        .setFooter({ text: `${interaction.guild.name} · powered by Aurex · ${today()}` })
         .setTimestamp(venta.timestamp);
 
     try {
@@ -974,10 +1005,12 @@ async function handleFactura(interaction) {
 }
 
 // ─────────────────────────────────────────────
-//  /servidor-stats — tarjeta completa
+//  /servidor-stats
 // ─────────────────────────────────────────────
 async function handleServidorStats(interaction) {
-    await interaction.deferReply();
+    const ok = await safeDefer(interaction);
+    if (!ok) return;
+
     const data   = loadData(interaction.guild.id);
     const tdata  = loadTickets(interaction.guild.id);
 
@@ -991,16 +1024,13 @@ async function handleServidorStats(interaction) {
         ? (data.resenas.reduce((s, r) => s + r.estrellas, 0) / totalResenas).toFixed(1)
         : null;
 
-    // Top vendedor y cliente
     const topV = Object.entries(data.analytics.porVendedor ?? {}).sort((a, b) => b[1].ventas - a[1].ventas)[0];
     const topC = Object.entries(data.analytics.porCliente ?? {}).sort((a, b) => b[1].compras - a[1].compras)[0];
 
-    // Rangos
     const hoy    = ventasPorRango(ventasActivas, 'hoy');
     const semana = ventasPorRango(ventasActivas, 'semana');
     const mes    = ventasPorRango(ventasActivas, 'mes');
 
-    // Distribución de tiers
     const tierConteo = { bronce: 0, plata: 0, oro: 0, vip: 0 };
     for (const [, c] of Object.entries(data.analytics.porCliente ?? {})) {
         const t = getTier(c.compras ?? 0);
@@ -1010,20 +1040,20 @@ async function handleServidorStats(interaction) {
     const embed = new EmbedBuilder()
         .setColor('#5865F2')
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
-        .setTitle('🏪  Estadísticas del Servidor')
+        .setTitle(`${E.analytics}  Estadísticas del Servidor`)
         .setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
         .setDescription(
-            `**📦 Pedidos**\n` +
+            `**${E.orders} Pedidos**\n` +
             `> 🌅  **Hoy:**         \`${hoy.length}\` — \`${formatRobux(hoy.reduce((s, v) => s + v.robux, 0))}\`\n` +
             `> 📅  **Esta semana:** \`${semana.length}\` — \`${formatRobux(semana.reduce((s, v) => s + v.robux, 0))}\`\n` +
             `> 🗓️  **Este mes:**    \`${mes.length}\` — \`${formatRobux(mes.reduce((s, v) => s + v.robux, 0))}\`\n` +
-            `> 📊  **Histórico:**   \`${ventasActivas.length}\` pedidos — \`${formatRobux(data.analytics.totalRobux)}\`\n\n` +
+            `> 📊  **Histórico:**   \`${ventasActivas.length}\` — \`${formatRobux(data.analytics.totalRobux)}\`\n\n` +
             `**👥 Comunidad**\n` +
             `> 🧑‍💼  **Clientes únicos:**   \`${clientesUnicos}\`\n` +
             `> 🤝  **Operadores activos:** \`${operadoresUnicos}\`\n` +
-            `> 🎟️  **Tickets cerrados:**  \`${ticketsCerrados}\`\n` +
+            `> ${E.ticket}  **Tickets cerrados:**  \`${ticketsCerrados}\`\n` +
             `> 📂  **Tickets abiertos:**  \`${ticketsAbiertos}\`\n` +
-            (promedioResenas ? `> ⭐  **Valoración promedio:** \`${promedioResenas}/5\` *(${totalResenas} reseñas)*\n` : '') +
+            (promedioResenas ? `> ${E.review}  **Valoración:** \`${promedioResenas}/5\` *(${totalResenas} reseñas)*\n` : '') +
             `\n**🎖️ Distribución de Tiers**\n` +
             `> 🥉 Bronce: \`${tierConteo.bronce}\`  🥈 Plata: \`${tierConteo.plata}\`  🥇 Oro: \`${tierConteo.oro}\`  💎 VIP: \`${tierConteo.vip}\`\n\n` +
             `**🏆 Destacados**\n` +
@@ -1031,81 +1061,53 @@ async function handleServidorStats(interaction) {
             `> 🛒  **Top cliente:**  ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}`
         )
         .setImage(BANNER_URL)
-        .setFooter({ text: `Aurex · Generado el ${today()}` })
+        .setFooter({ text: `Aurex · ${today()}` })
         .setTimestamp();
 
     return interaction.editReply({ embeds: [embed] });
 }
 
 // ─────────────────────────────────────────────
-//  RECORDATORIO — intervalo interno (cada 5 min)
-//  Si un ticket lleva >60 min sin respuesta de staff, menciona al staff
+//  RECORDATORIO — tickets sin respuesta
 // ─────────────────────────────────────────────
 async function verificarRecordatorios() {
-    const LIMITE_MS = 60 * 60 * 1000; // 60 minutos
+    const LIMITE_MS = 60 * 60 * 1000;
     const ahora = Date.now();
-
     for (const guild of client.guilds.cache.values()) {
         try {
             const tdata = loadTickets(guild.id);
             if (!tdata.config.staffRoleId) continue;
-
             const ticketsAbiertos = tdata.tickets.filter(t => t.estado === 'abierto');
             let guardado = false;
-
             for (const ticket of ticketsAbiertos) {
                 const ultimaActividad = ticket.ultimaActividad ?? ticket.timestamp;
-                const sinRespuesta = ahora - ultimaActividad;
-
-                if (sinRespuesta >= LIMITE_MS && !ticket.recordatorioEnviado) {
+                if (ahora - ultimaActividad >= LIMITE_MS && !ticket.recordatorioEnviado) {
                     try {
-                        const canal = guild.channels.cache.get(ticket.channelId)
-                            ?? await guild.channels.fetch(ticket.channelId).catch(() => null);
+                        const canal = guild.channels.cache.get(ticket.channelId) ?? await guild.channels.fetch(ticket.channelId).catch(() => null);
                         if (!canal) continue;
-
                         const cat = CATEGORIAS[ticket.categoria] ?? { emoji: '🎫', label: 'Ticket' };
                         await canal.send({
                             content: `<@&${tdata.config.staffRoleId}>`,
-                            embeds: [new EmbedBuilder()
-                                .setColor('#ED4245')
-                                .setTitle('⏰  Recordatorio — Ticket sin respuesta')
-                                .setDescription(
-                                    `> ${cat.emoji}  **Ticket #${ticket.id}** (${cat.label})\n` +
-                                    `> 👤  **Usuario:** <@${ticket.userId}>\n` +
-                                    `> ⏱️  **Sin respuesta hace:** \`${tiempoRelativo(sinRespuesta)}\`\n\n` +
-                                    `> *Por favor, atiende este ticket lo antes posible.*`
-                                )
-                                .setFooter({ text: 'Aurex · Recordatorio automático' })
-                                .setTimestamp()
-                            ]
+                            embeds: [new EmbedBuilder().setColor('#ED4245').setTitle(`${E.reloj}  Ticket sin respuesta`)
+                                .setDescription(`> ${cat.emoji}  **Ticket #${ticket.id}** (${cat.label})\n> 👤  **Usuario:** <@${ticket.userId}>\n> ⏱️  **Sin respuesta:** \`${tiempoRelativo(ahora - ultimaActividad)}\``)
+                                .setTimestamp()]
                         });
-
                         ticket.recordatorioEnviado = true;
                         guardado = true;
-                        console.log(`🔔 Recordatorio ticket #${ticket.id} → ${guild.name}`);
-                    } catch (err) {
-                        console.warn(`⚠️ Recordatorio ticket #${ticket.id}:`, err?.message);
-                    }
+                    } catch (err) { console.warn(`⚠️ Recordatorio ticket #${ticket.id}:`, err?.message); }
                 }
             }
-
             if (guardado) saveTickets(guild.id, tdata);
-        } catch (err) {
-            console.warn(`⚠️ [recordatorio] ${guild.name}:`, err?.message);
-        }
+        } catch (err) { console.warn(`⚠️ [recordatorio] ${guild.name}:`, err?.message); }
     }
 }
 
-// ─────────────────────────────────────────────
-//  Actualizar ultimaActividad cuando hay mensajes en tickets
-// ─────────────────────────────────────────────
 function actualizarActividadTicket(guildId, channelId) {
     try {
         const tdata = loadTickets(guildId);
         const ticket = tdata.tickets.find(t => t.channelId === channelId && t.estado === 'abierto');
         if (!ticket) return;
         ticket.ultimaActividad = Date.now();
-        // Resetear recordatorio si el staff respondió
         ticket.recordatorioEnviado = false;
         saveTickets(guildId, tdata);
     } catch { /* no crítico */ }
@@ -1120,9 +1122,8 @@ const client = new Client({
 client.on('error', (err) => { if (err?.code === 10062) return; console.error('❌ [Client]', err?.message); });
 client.once('clientReady', () => {
     console.log(`✅ Bot listo como ${client.user.tag}`);
-    client.user.setActivity('Aurex • /help 💎', { type: 3 });
+    client.user.setActivity(`Aurex • /help ${E.money}`, { type: 3 });
     setInterval(() => console.log(`💓 Keep-alive • ${new Date().toLocaleString('es-MX')} • ${client.ws.ping}ms`), 5 * 60 * 1000);
-    // Recordatorio de tickets cada 5 minutos
     setInterval(verificarRecordatorios, 5 * 60 * 1000);
 });
 
@@ -1131,10 +1132,7 @@ client.once('clientReady', () => {
 // ─────────────────────────────────────────────
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
-
-    // Actualizar actividad del ticket si el mensaje es en un canal de ticket
     actualizarActividadTicket(message.guild.id, message.channel.id);
-
     const data = loadData(message.guild.id);
     if (data.afk[message.author.id]) {
         const afkData = data.afk[message.author.id]; const duracion = tiempoRelativo(Date.now() - afkData.tiempo); const menciones = afkData.menciones ?? [];
@@ -1155,7 +1153,7 @@ client.on('messageCreate', async (message) => {
             }
         }
     }
-    if (message.mentions.has(client.user)) { await message.reply({ embeds: [new EmbedBuilder().setColor('#5865F2').setDescription(`### 👋  ¡Hola!\n\n> Usa \`/help\` para ver todos mis comandos.`)] }).catch(() => {}); return; }
+    if (message.mentions.has(client.user)) { await message.reply({ embeds: [new EmbedBuilder().setColor('#5865F2').setDescription(`### ${E.bot}  ¡Hola!\n\n> Usa \`/help\` para ver todos mis comandos.`)] }).catch(() => {}); return; }
     if (!message.content.startsWith(PREFIX)) return;
     const args = message.content.slice(PREFIX.length).trim().split(/ +/); const cmd = args.shift().toLowerCase();
     if (cmd === 'ping') return message.reply(`🏓 Pong! \`${Math.round(client.ws.ping)}ms\``).catch(() => {});
@@ -1179,7 +1177,7 @@ client.on('interactionCreate', async (interaction) => {
         (interaction.isButton()           && interaction.customId.startsWith('ticket_cerrar_'))
     ) return safeHandle(interaction, () => handleTicketInteraction(interaction));
 
-    // Stock bulk modal
+    // Stock bulk
     if (interaction.isModalSubmit() && interaction.customId === 'stock_bulk_modal')
         return safeHandle(interaction, () => handleStockBulkModal(interaction));
 
@@ -1191,20 +1189,18 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith('sorteo_finalizar_'))
         return safeHandle(interaction, () => handleSorteoFinalizar(interaction, interaction.customId.replace('sorteo_finalizar_', '')));
 
-    // Botones de help (categorías)
+    // Help botones
     if (interaction.isButton() && interaction.customId.startsWith('help_')) {
         return safeHandle(interaction, async () => {
             const key = interaction.customId.replace('help_cat_', '').replace('help_', '');
-            if (key === 'inicio') {
-                return interaction.update({ embeds: [buildHelpInicio(interaction.guild)], components: buildHelpRows() });
-            }
+            if (key === 'inicio') return interaction.update({ embeds: [buildHelpInicio(interaction.guild)], components: buildHelpRows() });
             const cat = HELP_CATEGORIAS[key];
             if (!cat) return;
             return interaction.update({ embeds: [cat.embed()], components: buildHelpRows() });
         });
     }
 
-    // Botones cancelar orden
+    // Cancelar orden botones
     if (interaction.isButton() && interaction.customId.startsWith('cancelar_confirm_')) {
         return safeHandle(interaction, async () => {
             const ordenId = parseInt(interaction.customId.split('_')[2]);
@@ -1217,13 +1213,13 @@ client.on('interactionCreate', async (interaction) => {
             if (data.analytics.porVendedor[venta.vendedorId]) { data.analytics.porVendedor[venta.vendedorId].ventas--; data.analytics.porVendedor[venta.vendedorId].robux -= venta.robux; }
             if (data.analytics.porCliente?.[venta.clienteId]) { data.analytics.porCliente[venta.clienteId].compras--; data.analytics.porCliente[venta.clienteId].robux -= venta.robux; }
             saveData(interaction.guild.id, data);
-            return interaction.update({ embeds: [new EmbedBuilder().setColor('#ED4245').setTitle('❌  Orden cancelada').setDescription(`> 🔖  **Orden:** \`#${ordenId}\`\n> 📦  **Producto:** \`${venta.producto}\`\n> 👤  **Cliente:** <@${venta.clienteId}>\n> 🔨  **Por:** <@${interaction.user.id}>`).setTimestamp()], components: [] });
+            return interaction.update({ embeds: [new EmbedBuilder().setColor('#ED4245').setTitle('❌  Orden cancelada').setDescription(`> ${E.orders}  **Orden:** \`#${ordenId}\`\n> 📦  **Producto:** \`${venta.producto}\`\n> 👤  **Cliente:** <@${venta.clienteId}>\n> 🔨  **Por:** <@${interaction.user.id}>`).setTimestamp()], components: [] });
         });
     }
     if (interaction.isButton() && interaction.customId.startsWith('cancelar_abort_'))
         return interaction.update({ content: '✅ Cancelación abortada.', components: [] }).catch(() => {});
 
-    // Botón reseña
+    // Reseña botón
     if (interaction.isButton() && interaction.customId.startsWith('reseña_')) {
         return safeHandle(interaction, async () => {
             const ordenId = parseInt(interaction.customId.split('_')[1]);
@@ -1251,7 +1247,7 @@ client.on('interactionCreate', async (interaction) => {
             if (isNaN(numEstrellas) || numEstrellas < 1 || numEstrellas > 5) return safeReply(interaction, { content: '⚠️ Calificación del 1 al 5.' });
             data.resenas.push({ ordenId, clienteId: venta.clienteId, clienteTag: venta.clienteTag, vendedorId: venta.vendedorId, estrellas: numEstrellas, comentario, timestamp: Date.now() });
             saveData(interaction.guild.id, data);
-            const embedResena = new EmbedBuilder().setColor('#FEE75C').setTitle(`${estrellas(numEstrellas)}  Reseña — Orden \`#${ordenId}\``).setDescription(`> 👤  **Cliente:**  <@${venta.clienteId}>\n> 🤝  **Operador:** <@${venta.vendedorId}>\n${comentario ? `\n> 💬  *"${comentario}"*` : ''}`).setTimestamp();
+            const embedResena = new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.review}  Reseña — Orden \`#${ordenId}\``).setDescription(`> 👤  **Cliente:**  <@${venta.clienteId}>\n> 🤝  **Operador:** <@${venta.vendedorId}>\n${comentario ? `\n> 💬  *"${comentario}"*` : ''}\n> ${estrellas(numEstrellas)}`).setTimestamp();
             await safeReply(interaction, { content: '', embeds: [embedResena] });
             if (data.config.resenaChannelId) { const canal = interaction.guild.channels.cache.get(data.config.resenaChannelId); if (canal) await canal.send({ embeds: [embedResena] }).catch(() => {}); }
         });
@@ -1264,21 +1260,30 @@ client.on('interactionCreate', async (interaction) => {
         const guild = interaction.guild;
         const user  = interaction.user;
 
-        if (interaction.commandName === 'help') {
+        if (interaction.commandName === 'help')
             return interaction.reply({ embeds: [buildHelpInicio(guild)], components: buildHelpRows(), ephemeral: true });
-        }
 
-        if (interaction.commandName === 'ping') return safeReply(interaction, { content: `🏓 Pong! \`${Math.round(client.ws.ping)}ms\`` });
+        if (interaction.commandName === 'ping')
+            return safeReply(interaction, { content: `🏓 Pong! \`${Math.round(client.ws.ping)}ms\`` });
+
         if (interaction.commandName === 'ticket-setup') return handleTicketSetup(interaction);
-
-        // ── NUEVOS COMANDOS ───────────────────────────────────────────────
-
         if (interaction.commandName === 'sorteo')         return handleSorteo(interaction);
         if (interaction.commandName === 'notificar')      return handleNotificar(interaction);
         if (interaction.commandName === 'factura')        return handleFactura(interaction);
         if (interaction.commandName === 'servidor-stats') return handleServidorStats(interaction);
 
-        // ─────────────────────────────────────────────────────────────────
+        // /setvip — define el rol VIP para doble entrada en sorteos
+        if (interaction.commandName === 'setvip') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return safeReply(interaction, { content: '🚫 Solo administradores.' });
+            const rol = interaction.options.getRole('rol');
+            data.config.vipRoleId = rol.id;
+            saveData(guild.id, data);
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#FEE75C')
+                .setTitle(`${E.roles}  Rol VIP configurado`)
+                .setDescription(`> 💎  **Rol VIP:** <@&${rol.id}>\n> 🎟️  Los miembros con este rol tendrán **doble entrada** en sorteos.`)
+                .setTimestamp()] });
+        }
 
         if (interaction.commandName === 'settiers') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
@@ -1294,16 +1299,15 @@ client.on('interactionCreate', async (interaction) => {
             const sinCambios = !rolBronce && !rolPlata && !rolOro && !rolVip;
             if (!sinCambios) saveData(guild.id, data);
             const tr = data.config.tierRoles;
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle('🎖️  Tiers de compras')
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.roles}  Tiers de compras`)
                 .setDescription(
-                    `${sinCambios ? '> *Mostrando configuración actual. Pasa roles para cambiarlos.*\n\n' : ''}` +
-                    `> 🥉  **Bronce** *(1+ compra)*   → ${tr.bronce ? `<@&${tr.bronce}>` : '`Sin configurar`'}\n` +
-                    `> 🥈  **Plata**  *(5+ compras)*  → ${tr.plata  ? `<@&${tr.plata}>`  : '`Sin configurar`'}\n` +
-                    `> 🥇  **Oro**    *(10+ compras)* → ${tr.oro    ? `<@&${tr.oro}>`    : '`Sin configurar`'}\n` +
-                    `> 💎  **VIP**    *(20+ compras)* → ${tr.vip    ? `<@&${tr.vip}>`    : '`Sin configurar`'}`
+                    `${sinCambios ? '> *Mostrando configuración actual.*\n\n' : ''}` +
+                    `> 🥉  **Bronce** *(1+)*   → ${tr.bronce ? `<@&${tr.bronce}>` : '`Sin configurar`'}\n` +
+                    `> 🥈  **Plata**  *(5+)*   → ${tr.plata  ? `<@&${tr.plata}>`  : '`Sin configurar`'}\n` +
+                    `> 🥇  **Oro**    *(10+)*  → ${tr.oro    ? `<@&${tr.oro}>`    : '`Sin configurar`'}\n` +
+                    `> 💎  **VIP**    *(20+)*  → ${tr.vip    ? `<@&${tr.vip}>`    : '`Sin configurar`'}`
                 )
-                .setFooter({ text: sinCambios ? 'Sin cambios realizados' : '✅ Guardado — Los roles se asignan automáticamente al vender.' })
-                .setTimestamp()] });
+                .setFooter({ text: sinCambios ? 'Sin cambios' : '✅ Guardado' }).setTimestamp()] });
         }
 
         if (interaction.commandName === 'vender') {
@@ -1335,7 +1339,7 @@ client.on('interactionCreate', async (interaction) => {
             await interaction.reply({ embeds: [buildVentaPublicaEmbed(venta, n)], components: [rowResena] });
             if (data.config.dmEnabled) await enviarDM(clienteU, buildDMVentaEmbed(venta, n, guild.name, guild.iconURL({ dynamic: true })));
             if (data.config.logChannelId) { const lc = guild.channels.cache.get(data.config.logChannelId); if (lc) await lc.send({ embeds: [buildLogEmbed(venta, n)] }).catch(() => {}); }
-            if (data.analytics.totalVentas % 10 === 0) await interaction.followUp({ embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle('🏆  ¡Hito alcanzado!').setDescription(`> **${guild.name}** alcanzó **${data.analytics.totalVentas}** pedidos.\n> 💎 Total: \`${formatRobux(data.analytics.totalRobux)}\``)] }).catch(() => {});
+            if (data.analytics.totalVentas % 10 === 0) await interaction.followUp({ embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle('🏆  ¡Hito alcanzado!').setDescription(`> **${guild.name}** alcanzó **${data.analytics.totalVentas}** pedidos.\n> ${E.money} Total: \`${formatRobux(data.analytics.totalRobux)}\``)] }).catch(() => {});
             return;
         }
 
@@ -1344,7 +1348,7 @@ client.on('interactionCreate', async (interaction) => {
             if (!venta) return safeReply(interaction, { content: `⚠️ No existe esa orden.` });
             const resena = data.resenas?.find(r => r.ordenId === venta.id);
             return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor(venta.estado === 'cancelada' ? '#ED4245' : '#5865F2').setTitle(`${venta.estado === 'cancelada' ? '❌' : '✅'}  Orden \`#${venta.id}\``)
-                .setDescription(`> 📦  **Producto:** \`${venta.producto}\`\n> 💎  **Cantidad:** \`${formatRobux(venta.robux)}\`\n> 💵  **Precio:**   \`${venta.precio}\`\n> 💳  **Método:**   \`${venta.metodo}\`\n> ━━━━━━━━━━━━━━━━━━━━━━━━\n> 👤  **Cliente:**  <@${venta.clienteId}>\n> 🤝  **Operador:** <@${venta.vendedorId}>\n\n**⭐ Reseña:** ${resena ? `${estrellas(resena.estrellas)}${resena.comentario ? ` *"${resena.comentario}"*` : ''}` : '*Sin reseña aún*'}`)
+                .setDescription(`> 📦  **Producto:** \`${venta.producto}\`\n> ${E.money}  **Cantidad:** \`${formatRobux(venta.robux)}\`\n> 💵  **Precio:**   \`${venta.precio}\`\n> 💳  **Método:**   \`${venta.metodo}\`\n> ━━━━━━━━━━━━━━━━━━━━━━━━\n> 👤  **Cliente:**  <@${venta.clienteId}>\n> 🤝  **Operador:** <@${venta.vendedorId}>\n\n**${E.review} Reseña:** ${resena ? `${estrellas(resena.estrellas)}${resena.comentario ? ` *"${resena.comentario}"*` : ''}` : '*Sin reseña aún*'}`)
                 .setFooter({ text: `Estado: ${venta.estado}` }).setTimestamp(venta.timestamp)] });
         }
 
@@ -1357,7 +1361,7 @@ client.on('interactionCreate', async (interaction) => {
             const promedio = resenas.length > 0 ? (resenas.reduce((s, r) => s + r.estrellas, 0) / resenas.length).toFixed(1) : null;
             const tierCliente = getTier(data.analytics.porCliente?.[objetivo.id]?.compras ?? 0);
             return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`👤  Historial de ${objetivo.username}`).setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
-                .setDescription(`> 🛒  **Pedidos:** \`${ventas.length}\`\n> 💎  **R$ gastados:** \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\`\n${promedio ? `> ⭐  **Promedio:** \`${promedio}/5\`\n` : ''}${tierCliente ? `> 🎖️  **Tier:** \`${tierCliente.emoji} ${tierCliente.label}\`\n` : ''}\n**Últimos pedidos:**\n${ultimas.map(v => `> \`#${v.id}\` **${v.producto}** — \`${formatRobux(v.robux)}\` — <t:${Math.floor(v.timestamp / 1000)}:d>`).join('\n')}`)
+                .setDescription(`> 🛒  **Pedidos:** \`${ventas.length}\`\n> ${E.money}  **R$ gastados:** \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\`\n${promedio ? `> ${E.review}  **Promedio:** \`${promedio}/5\`\n` : ''}${tierCliente ? `> 🎖️  **Tier:** \`${tierCliente.emoji} ${tierCliente.label}\`\n` : ''}\n**Últimos pedidos:**\n${ultimas.map(v => `> \`#${v.id}\` **${v.producto}** — \`${formatRobux(v.robux)}\` — <t:${Math.floor(v.timestamp / 1000)}:d>`).join('\n')}`)
                 .setFooter({ text: `Mostrando ${ultimas.length} de ${ventas.length}` }).setTimestamp()] });
         }
 
@@ -1368,8 +1372,8 @@ client.on('interactionCreate', async (interaction) => {
             if (filtroU) ventas = ventas.filter(v => v.clienteId === filtroU.id || v.vendedorId === filtroU.id);
             if (ventas.length === 0) return safeReply(interaction, { content: '📭 No hay pedidos con ese filtro.' });
             const ultimas = ventas.slice(-10).reverse();
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`📜  Historial — ${guild.name}`)
-                .setDescription(ultimas.map(v => { const t = v.estado === 'cancelada' ? '~~' : ''; return `> \`#${v.id}\` ${t}**${v.producto}**${t} — \`${formatRobux(v.robux)}\` — <@${v.clienteId}>`; }).join('\n') + `\n\n> 🧾  **Total:** \`${ventas.length}\`\n> 💎  **R$ movidos:** \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\``)
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`${E.orders}  Historial — ${guild.name}`)
+                .setDescription(ultimas.map(v => { const t = v.estado === 'cancelada' ? '~~' : ''; return `> \`#${v.id}\` ${t}**${v.producto}**${t} — \`${formatRobux(v.robux)}\` — <@${v.clienteId}>`; }).join('\n') + `\n\n> 🧾  **Total:** \`${ventas.length}\`\n> ${E.money}  **R$ movidos:** \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\``)
                 .setFooter({ text: `Últimos ${ultimas.length} de ${ventas.length}` }).setTimestamp()] });
         }
 
@@ -1381,7 +1385,7 @@ client.on('interactionCreate', async (interaction) => {
             if (data.resenas?.find(r => r.ordenId === ordenId)) return safeReply(interaction, { content: '⚠️ Ya dejaste una reseña.' });
             const modal = new ModalBuilder().setCustomId(`modal_resena_${ordenId}`).setTitle(`Reseña — Orden #${ordenId}`);
             modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('estrellas').setLabel('Calificación (1 a 5)').setPlaceholder('Número del 1 al 5').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('estrellas').setLabel('Calificación (1 a 5)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1)),
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('comentario').setLabel('Comentario (opcional)').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(300))
             );
             return interaction.showModal(modal);
@@ -1392,7 +1396,7 @@ client.on('interactionCreate', async (interaction) => {
             const resenas = data.resenas?.filter(r => r.vendedorId === objetivo.id) ?? [];
             if (resenas.length === 0) return safeReply(interaction, { content: `📭 **${objetivo.username}** no tiene reseñas.` });
             const promedio = (resenas.reduce((s, r) => s + r.estrellas, 0) / resenas.length).toFixed(1);
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle(`⭐  Reseñas de ${objetivo.username}`).setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.review}  Reseñas de ${objetivo.username}`).setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
                 .setDescription(`> **Promedio:** \`${promedio}/5\` *(${resenas.length} reseña${resenas.length !== 1 ? 's' : ''})*\n\n${resenas.slice(-5).reverse().map(r => `> ${estrellas(r.estrellas)} <@${r.clienteId}>` + (r.comentario ? ` — *"${r.comentario}"*` : '')).join('\n')}`)
                 .setFooter({ text: `Últimas ${Math.min(5, resenas.length)} de ${resenas.length}` }).setTimestamp()] });
         }
@@ -1403,7 +1407,7 @@ client.on('interactionCreate', async (interaction) => {
             const venta = data.ventas.find(v => v.id === ordenId);
             if (!venta) return safeReply(interaction, { content: `⚠️ No existe la orden \`#${ordenId}\`.` });
             if (venta.estado === 'cancelada') return safeReply(interaction, { content: '⚠️ Ya está cancelada.' });
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#ED4245').setTitle(`⚠️  ¿Cancelar orden \`#${ordenId}\`?`).setDescription(`> 📦  **Producto:** \`${venta.producto}\`\n> 👤  **Cliente:**  <@${venta.clienteId}>\n> 💎  **Cantidad:** \`${formatRobux(venta.robux)}\`\n\n*Esta acción **no se puede deshacer**.*`)],
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#ED4245').setTitle(`⚠️  ¿Cancelar orden \`#${ordenId}\`?`).setDescription(`> ${E.orders}  **Producto:** \`${venta.producto}\`\n> 👤  **Cliente:**  <@${venta.clienteId}>\n> ${E.money}  **Cantidad:** \`${formatRobux(venta.robux)}\`\n\n*Esta acción **no se puede deshacer**.*`)],
                 components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`cancelar_confirm_${ordenId}`).setLabel('Sí, cancelar').setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId(`cancelar_abort_${ordenId}`).setLabel('No, mantener').setStyle(ButtonStyle.Secondary))] });
         }
 
@@ -1417,7 +1421,7 @@ client.on('interactionCreate', async (interaction) => {
             let texto = `REPORTE — ${etiquetas[rango]}\nServidor: ${guild.name}\nGenerado: ${new Date().toLocaleString('es-MX')}\n${'─'.repeat(60)}\n\n`;
             ventas.forEach(v => { texto += `#${v.id} | ${v.producto} | ${formatRobux(v.robux)} | ${v.precio} | ${v.metodo} | Cliente: ${v.clienteTag} | Operador: ${v.vendedorTag}\n`; });
             texto += `\n${'─'.repeat(60)}\nTOTAL: ${ventas.length} pedidos | ${formatRobux(totalRobux)}\n`;
-            return interaction.reply({ content: `📁 **${ventas.length}** pedidos exportados:`, files: [{ attachment: Buffer.from(texto, 'utf8'), name: `pedidos-${rango}.txt` }], ephemeral: true });
+            return interaction.reply({ content: `${E.export} **${ventas.length}** pedidos exportados:`, files: [{ attachment: Buffer.from(texto, 'utf8'), name: `pedidos-${rango}.txt` }], ephemeral: true });
         }
 
         if (interaction.commandName === 'perfil') {
@@ -1427,8 +1431,10 @@ client.on('interactionCreate', async (interaction) => {
             const resenas = data.resenas?.filter(r => r.vendedorId === objetivo.id) ?? [];
             const promedio = resenas.length > 0 ? `${(resenas.reduce((s, r) => s + r.estrellas, 0) / resenas.length).toFixed(1)}/5` : 'Sin reseñas';
             const tierCliente = getTier(data.analytics.porCliente?.[objetivo.id]?.compras ?? 0);
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`👤  ${objetivo.username}`).setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
-                .setDescription(`**Como operador**\n> 🧾  **Pedidos:**    \`${comoVendedor.length}\`\n> 💎  **R$ movidos:** \`${formatRobux(comoVendedor.reduce((s, v) => s + v.robux, 0))}\`\n> ⭐  **Valoración:** \`${promedio}\`\n\n**Como cliente**\n> 🛒  **Compras:**    \`${comoCliente.length}\`\n> 💎  **R$ gastados:** \`${formatRobux(comoCliente.reduce((s, v) => s + v.robux, 0))}\`\n> 🎖️  **Tier:**       \`${tierCliente ? `${tierCliente.emoji} ${tierCliente.label}` : 'Sin tier'}\``)
+            const miembroObjetivo = guild.members.cache.get(objetivo.id);
+            const esVip = esClienteVip(miembroObjetivo, data.config?.vipRoleId ?? null);
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`👤  ${objetivo.username}${esVip ? '  💎 VIP' : ''}`).setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
+                .setDescription(`**Como operador**\n> 🧾  **Pedidos:**    \`${comoVendedor.length}\`\n> ${E.money}  **R$ movidos:** \`${formatRobux(comoVendedor.reduce((s, v) => s + v.robux, 0))}\`\n> ${E.review}  **Valoración:** \`${promedio}\`\n\n**Como cliente**\n> 🛒  **Compras:**    \`${comoCliente.length}\`\n> ${E.money}  **R$ gastados:** \`${formatRobux(comoCliente.reduce((s, v) => s + v.robux, 0))}\`\n> 🎖️  **Tier:**       \`${tierCliente ? `${tierCliente.emoji} ${tierCliente.label}` : 'Sin tier'}\`${esVip ? `\n> 🎟️  **Sorteos:**    Doble entrada (VIP)` : ''}`)
                 .setFooter({ text: guild.name }).setTimestamp()] });
         }
 
@@ -1436,8 +1442,8 @@ client.on('interactionCreate', async (interaction) => {
             const rango = interaction.options.getString('rango') ?? 'hoy';
             const ventas = ventasPorRango(data.ventas, rango).filter(v => v.estado !== 'cancelada');
             const etiquetas = { hoy: 'Hoy', semana: 'Esta semana', mes: 'Este mes' };
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle(`📊  Stats — ${etiquetas[rango]}`)
-                .setDescription(`> 🧾  **Pedidos:**         \`${ventas.length}\`\n> 💎  **R$ movidos:**      \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\`\n> 👥  **Clientes únicos:** \`${new Set(ventas.map(v => v.clienteId)).size}\`\n\n> 📦  **Total histórico:** \`${data.ventas.filter(v => v.estado !== 'cancelada').length}\`\n> 💰  **Total R$ hist.:**  \`${formatRobux(data.analytics.totalRobux)}\``)
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.stats}  Stats — ${etiquetas[rango]}`)
+                .setDescription(`> 🧾  **Pedidos:**         \`${ventas.length}\`\n> ${E.money}  **R$ movidos:**      \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\`\n> 👥  **Clientes únicos:** \`${new Set(ventas.map(v => v.clienteId)).size}\`\n\n> 📦  **Total histórico:** \`${data.ventas.filter(v => v.estado !== 'cancelada').length}\`\n> 💰  **Total R$ hist.:**  \`${formatRobux(data.analytics.totalRobux)}\``)
                 .setFooter({ text: guild.name }).setTimestamp()] });
         }
 
@@ -1463,8 +1469,8 @@ client.on('interactionCreate', async (interaction) => {
             const topC = data.analytics.porCliente ? Object.entries(data.analytics.porCliente).sort((a, b) => b[1].compras - a[1].compras)[0] : null;
             const totalR = data.resenas?.length ?? 0;
             const prom = totalR > 0 ? (data.resenas.reduce((s, r) => s + r.estrellas, 0) / totalR).toFixed(1) : null;
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`📈  Dashboard — ${guild.name}`).setThumbnail(guild.iconURL({ dynamic: true }) ?? null)
-                .setDescription(`> 🌅  **Hoy:**         \`${hoy.length}\` pedidos • \`${formatRobux(hoy.reduce((s, v) => s + v.robux, 0))}\`\n> 📅  **Esta semana:** \`${semana.length}\` pedidos • \`${formatRobux(semana.reduce((s, v) => s + v.robux, 0))}\`\n> 🗓️  **Este mes:**    \`${mes.length}\` pedidos • \`${formatRobux(mes.reduce((s, v) => s + v.robux, 0))}\`\n> 📦  **Histórico:**   \`${data.analytics.totalVentas}\` pedidos • \`${formatRobux(data.analytics.totalRobux)}\`\n\n> 🏆  **Top operador:** ${topV ? `<@${topV[0]}> (\`${topV[1].ventas}\` pedidos)` : '`Sin datos`'}\n> 👑  **Top cliente:**  ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}${prom ? `\n> ⭐  **Valoración:**  \`${prom}/5\` *(${totalR} reseñas)*` : ''}`)
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`${E.analytics}  Dashboard — ${guild.name}`).setThumbnail(guild.iconURL({ dynamic: true }) ?? null)
+                .setDescription(`> 🌅  **Hoy:**         \`${hoy.length}\` pedidos • \`${formatRobux(hoy.reduce((s, v) => s + v.robux, 0))}\`\n> 📅  **Esta semana:** \`${semana.length}\` pedidos • \`${formatRobux(semana.reduce((s, v) => s + v.robux, 0))}\`\n> 🗓️  **Este mes:**    \`${mes.length}\` pedidos • \`${formatRobux(mes.reduce((s, v) => s + v.robux, 0))}\`\n> 📦  **Histórico:**   \`${data.analytics.totalVentas}\` pedidos • \`${formatRobux(data.analytics.totalRobux)}\`\n\n> 🏆  **Top operador:** ${topV ? `<@${topV[0]}> (\`${topV[1].ventas}\` pedidos)` : '`Sin datos`'}\n> 👑  **Top cliente:**  ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}${prom ? `\n> ${E.review}  **Valoración:**  \`${prom}/5\` *(${totalR} reseñas)*` : ''}`)
                 .setFooter({ text: 'Aurex' }).setTimestamp()] });
         }
 
@@ -1477,7 +1483,12 @@ client.on('interactionCreate', async (interaction) => {
 
         if (interaction.commandName === 'anuncio') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
+            const imagenUrl = interaction.options.getString('imagen') ?? null;
             const embed = new EmbedBuilder().setColor('#ED4245').setTitle(`📢  ${interaction.options.getString('titulo')}`).setDescription(interaction.options.getString('mensaje')).setFooter({ text: `Anuncio por ${user.tag} · Aurex` }).setTimestamp();
+            // Agregar imagen si se proporcionó
+            if (imagenUrl) {
+                try { new URL(imagenUrl); embed.setImage(imagenUrl); } catch {}
+            }
             const opts = { embeds: [embed] };
             const textoBoton = interaction.options.getString('texto_boton'); const enlaceBoton = interaction.options.getString('enlace_boton');
             if (textoBoton && enlaceBoton) opts.components = [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(textoBoton).setURL(enlaceBoton).setStyle(ButtonStyle.Link))];
@@ -1497,21 +1508,21 @@ client.on('interactionCreate', async (interaction) => {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
             data.config.logChannelId = interaction.options.getChannel('canal').id;
             saveData(guild.id, data);
-            return safeReply(interaction, { content: `✅ Canal de logs: <#${data.config.logChannelId}>` });
+            return safeReply(interaction, { content: `${E.settings} Canal de logs: <#${data.config.logChannelId}>` });
         }
 
         if (interaction.commandName === 'setresenas') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
             data.config.resenaChannelId = interaction.options.getChannel('canal').id;
             saveData(guild.id, data);
-            return safeReply(interaction, { content: `✅ Canal de reseñas: <#${data.config.resenaChannelId}>` });
+            return safeReply(interaction, { content: `${E.settings} Canal de reseñas: <#${data.config.resenaChannelId}>` });
         }
 
         if (interaction.commandName === 'configdm') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
             data.config.dmEnabled = interaction.options.getBoolean('estado');
             saveData(guild.id, data);
-            return safeReply(interaction, { content: `✅ DMs: **${data.config.dmEnabled ? 'activados ✅' : 'desactivados ❌'}**` });
+            return safeReply(interaction, { content: `${E.settings} DMs: **${data.config.dmEnabled ? 'activados ✅' : 'desactivados ❌'}**` });
         }
 
         if (interaction.commandName === 'setdm') {
@@ -1519,14 +1530,14 @@ client.on('interactionCreate', async (interaction) => {
             const texto = interaction.options.getString('texto');
             data.config.dmCierreTexto = texto;
             saveData(guild.id, data);
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287').setTitle('✅  Mensaje de cierre actualizado').setDescription(`> ${texto.replace(/\n/g, '\n> ')}\n\n*Variables: \`{usuario}\` \`{servidor}\`*`)] });
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287').setTitle(`${E.settings}  Mensaje de cierre actualizado`).setDescription(`> ${texto.replace(/\n/g, '\n> ')}\n\n*Variables: \`{usuario}\` \`{servidor}\`*`)] });
         }
 
         if (interaction.commandName === 'stock') {
             const stock = data.stock ?? [];
             if (stock.length === 0) return safeReply(interaction, { content: '📭 El stock está vacío.' });
-            const lineas = stock.map(item => `> 📦  **${item.nombre}**\n> ├ 🔢 Cantidad: \`${item.cantidad}\`\n> ├ 💵 Precio:   \`${item.precio ?? 'No especificado'}\`\n> └ 📝 Notas:    \`${item.notas ?? '—'}\``).join('\n\n');
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle('📦  Stock disponible').setDescription(lineas).setFooter({ text: `${stock.length} ítem(s) • ${guild.name} · Aurex` }).setTimestamp()] });
+            const lineas = stock.map(item => `> ${E.stock}  **${item.nombre}**\n> ├ 🔢 Cantidad: \`${item.cantidad}\`\n> ├ 💵 Precio:   \`${item.precio ?? 'No especificado'}\`\n> └ 📝 Notas:    \`${item.notas ?? '—'}\``).join('\n\n');
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`${E.stock}  Stock disponible`).setDescription(lineas).setFooter({ text: `${stock.length} ítem(s) • ${guild.name} · Aurex` }).setTimestamp()] });
         }
 
         if (interaction.commandName === 'stock-admin') {
@@ -1534,7 +1545,7 @@ client.on('interactionCreate', async (interaction) => {
             const accion = interaction.options.getString('accion'); const nombre = interaction.options.getString('nombre');
             const cantidad = interaction.options.getInteger('cantidad'); const precio = interaction.options.getString('precio'); const notas = interaction.options.getString('notas');
             if (!data.stock) data.stock = [];
-            if (accion === 'agregar') { data.stock.push({ nombre, cantidad: cantidad ?? 0, precio: precio ?? null, notas: notas ?? null }); saveData(guild.id, data); return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287').setTitle('✅  Ítem agregado').setDescription(`> 📦  **${nombre}** — \`${cantidad ?? 0}\` unidades — \`${precio ?? 'Sin precio'}\``)] }); }
+            if (accion === 'agregar') { data.stock.push({ nombre, cantidad: cantidad ?? 0, precio: precio ?? null, notas: notas ?? null }); saveData(guild.id, data); return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287').setTitle(`${E.stock}  Ítem agregado`).setDescription(`> 📦  **${nombre}** — \`${cantidad ?? 0}\` unidades — \`${precio ?? 'Sin precio'}\``)] }); }
             if (accion === 'editar') { const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre?.toLowerCase()); if (idx === -1) return safeReply(interaction, { content: `⚠️ No existe \`${nombre}\`.` }); if (cantidad !== null) data.stock[idx].cantidad = cantidad; if (precio !== null) data.stock[idx].precio = precio; if (notas !== null) data.stock[idx].notas = notas; saveData(guild.id, data); return safeReply(interaction, { content: `✅ \`${data.stock[idx].nombre}\` actualizado.` }); }
             if (accion === 'eliminar') { const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre?.toLowerCase()); if (idx === -1) return safeReply(interaction, { content: `⚠️ No existe \`${nombre}\`.` }); data.stock.splice(idx, 1); saveData(guild.id, data); return safeReply(interaction, { content: `🗑️ **${nombre}** eliminado.` }); }
             if (accion === 'limpiar') { data.stock = []; saveData(guild.id, data); return safeReply(interaction, { content: '🗑️ Stock limpiado.' }); }
@@ -1546,7 +1557,7 @@ client.on('interactionCreate', async (interaction) => {
             modal.addComponents(
                 new ActionRowBuilder().addComponents(
                     new TextInputBuilder().setCustomId('items_texto').setLabel('Ítems — uno por línea').setStyle(TextInputStyle.Paragraph)
-                        .setPlaceholder('Nombre | cantidad | precio | notas\n\nEjemplos:\nRobux 1000 | 10 | $5 USD | Entrega inmediata\nCuenta Premium | 3 | $15 USD\nServicio Básico | 5')
+                        .setPlaceholder('Nombre | cantidad | precio | notas\n\nEjemplos:\nRobux 1000 | 10 | $5 USD | Entrega inmediata\nCuenta Premium | 3 | $15 USD')
                         .setRequired(true).setMaxLength(3000)
                 ),
                 new ActionRowBuilder().addComponents(
