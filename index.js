@@ -26,7 +26,6 @@ const E = {
     bot:      '<:Aurex_Bot:1513350718248058991>',
     money:    '<:Aurex_Money:1513350564094804032>',
     ticket:   '<:Aurex_Ticket:1513350401850871819>',
-    // ── Nuevos emojis ──
     carrito:  '🛒',
     tarjeta:  '💳',
     keycard:  '🪪',
@@ -40,7 +39,6 @@ const E = {
     cruz:     '❌',
     advertencia: '⚠️',
     flecha:   '➜',
-    // ── Decorativos ──
     arrow:    '╰➤',
     arrowR:   '➜',
     dot:      '◆',
@@ -57,18 +55,17 @@ const TIER_UMBRALES = [
 // ─── Persistencia ─────────────────────────────────────────────────────────────
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
-const _cache = new Map();
 
+// FIX MULTI-SERVIDOR: sin caché en memoria para operaciones críticas
+// Siempre leer desde disco en tickets y acciones importantes
 function loadData(guildId) {
-    if (_cache.has(`d_${guildId}`)) return _cache.get(`d_${guildId}`);
     const file = path.join(DATA_DIR, `${guildId}.json`);
-    if (!fs.existsSync(file)) { const d = defaultData(); _cache.set(`d_${guildId}`, d); return d; }
-    try { const d = JSON.parse(fs.readFileSync(file, 'utf8')); _cache.set(`d_${guildId}`, d); return d; }
+    if (!fs.existsSync(file)) return defaultData();
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
     catch { return defaultData(); }
 }
 function saveData(guildId, data) {
-    _cache.set(`d_${guildId}`, data);
-    fs.writeFileSync(path.join(DATA_DIR, `${guildId}.json`), JSON.stringify(data), 'utf8');
+    fs.writeFileSync(path.join(DATA_DIR, `${guildId}.json`), JSON.stringify(data, null, 2), 'utf8');
 }
 function defaultData() {
     return {
@@ -79,16 +76,16 @@ function defaultData() {
         sorteos: []
     };
 }
+
+// FIX MULTI-SERVIDOR: tickets siempre desde disco, sin caché
 function loadTickets(guildId) {
-    if (_cache.has(`t_${guildId}`)) return _cache.get(`t_${guildId}`);
     const file = path.join(DATA_DIR, `tickets_${guildId}.json`);
-    if (!fs.existsSync(file)) { const d = defaultTickets(); _cache.set(`t_${guildId}`, d); return d; }
-    try { const d = JSON.parse(fs.readFileSync(file, 'utf8')); _cache.set(`t_${guildId}`, d); return d; }
+    if (!fs.existsSync(file)) return defaultTickets();
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
     catch { return defaultTickets(); }
 }
 function saveTickets(guildId, data) {
-    _cache.set(`t_${guildId}`, data);
-    fs.writeFileSync(path.join(DATA_DIR, `tickets_${guildId}.json`), JSON.stringify(data), 'utf8');
+    fs.writeFileSync(path.join(DATA_DIR, `tickets_${guildId}.json`), JSON.stringify(data, null, 2), 'utf8');
 }
 function defaultTickets() {
     return {
@@ -97,18 +94,26 @@ function defaultTickets() {
     };
 }
 
+// ─── Lock de tickets para evitar doble apertura ───────────────────────────────
+// Previene que dos clicks simultáneos abran dos tickets
+const ticketLocks = new Set();
+
 // ─── Manejo global de errores ─────────────────────────────────────────────────
 process.on('unhandledRejection', (err) => {
-    if (err?.code === 10062 || err?.code === 40060) return;
-    console.error('❌ [unhandledRejection]', err?.message ?? err);
+    if (!err) return;
+    if (err.code === 10062 || err.code === 40060) return;
+    if (err.message?.includes('Unknown interaction')) return;
+    console.error('❌ [unhandledRejection]', err.message ?? err);
 });
 process.on('uncaughtException', (err) => {
-    if (err?.code === 10062 || err?.code === 40060 || err?.message?.includes('Unknown interaction')) return;
-    console.error('❌ [uncaughtException]', err?.message ?? err);
+    if (!err) return;
+    if (err.code === 10062 || err.code === 40060) return;
+    if (err.message?.includes('Unknown interaction')) return;
+    console.error('❌ [uncaughtException]', err.message ?? err);
 });
 
 // ─── Helpers de interacción ───────────────────────────────────────────────────
-// FIX: flags: 64 en lugar de ephemeral:true (deprecated)
+// FIX: flags: 64 en lugar de ephemeral (deprecated en v15)
 async function safeReply(interaction, opts) {
     const normalized = { ...opts };
     if (normalized.ephemeral === true) { normalized.flags = 64; delete normalized.ephemeral; }
@@ -119,6 +124,18 @@ async function safeReply(interaction, opts) {
     } catch (e) {
         if (e?.code === 10062 || e?.code === 40060) return;
         console.warn('⚠️ [safeReply]', e?.message);
+    }
+}
+
+// safeReplyPublic: para respuestas que deben ser visibles para todos (sin flags:64)
+async function safeReplyPublic(interaction, opts) {
+    try {
+        if (interaction.replied)  return await interaction.followUp(opts);
+        if (interaction.deferred) return await interaction.editReply(opts);
+        return await interaction.reply(opts);
+    } catch (e) {
+        if (e?.code === 10062 || e?.code === 40060) return;
+        console.warn('⚠️ [safeReplyPublic]', e?.message);
     }
 }
 
@@ -138,9 +155,13 @@ async function safeHandle(interaction, fn) {
     try {
         await fn();
     } catch (err) {
-        if (err?.code === 10062 || err?.code === 40060 || err?.message?.includes('Unknown interaction')) return;
-        console.error(`❌ [safeHandle] ${interaction.commandName ?? interaction.customId ?? '?'}:`, err?.message ?? err);
-        const esFaltaPermisos = err?.code === 50013 || err?.message?.toLowerCase().includes('missing permissions') || err?.message?.toLowerCase().includes('missing access');
+        if (!err) return;
+        if (err.code === 10062 || err.code === 40060) return;
+        if (err.message?.includes('Unknown interaction')) return;
+        console.error(`❌ [safeHandle] ${interaction.commandName ?? interaction.customId ?? '?'}:`, err.message ?? err);
+        const esFaltaPermisos = err.code === 50013
+            || err.message?.toLowerCase().includes('missing permissions')
+            || err.message?.toLowerCase().includes('missing access');
         await safeReply(interaction, {
             content: esFaltaPermisos
                 ? '⚠️ **Faltan permisos.** El bot necesita: `Gestionar canales` `Gestionar roles` `Ver canales` `Enviar mensajes`.'
@@ -343,7 +364,8 @@ const HELP_CATEGORIAS = {
                 `**\`/notificar\`**\n${E.arrow} DM masivo a clientes registrados.\n\n` +
                 `**\`/sorteo\`**\n${E.arrow} Crea un sorteo. VIPs tienen doble entrada.\n\n` +
                 `**\`/clear [cantidad]\`**\n${E.arrow} Borra hasta 100 mensajes.\n\n` +
-                `**\`/ping\`**\n${E.arrow} Latencia actual del bot.`
+                `**\`/ping\`**\n${E.arrow} Latencia actual del bot.\n\n` +
+                `**Prefijo \`$\`:**\n${E.arrow} \`$ping\` · \`$help\``
             ).setFooter({ text: 'Aurex • /help • Utilidades' }).setTimestamp()
     },
     config: {
@@ -475,7 +497,8 @@ function buildPanelRow() {
 async function logTicket(guild, tdata, embedLog, archivo = null) {
     if (!tdata.config.logChannelId) return;
     try {
-        const canal = guild.channels.cache.get(tdata.config.logChannelId) ?? await guild.channels.fetch(tdata.config.logChannelId).catch(() => null);
+        const canal = guild.channels.cache.get(tdata.config.logChannelId)
+            ?? await guild.channels.fetch(tdata.config.logChannelId).catch(() => null);
         if (!canal) return;
         await canal.send({ embeds: [embedLog], ...(archivo ? { files: [archivo] } : {}) });
     } catch (err) { console.warn('⚠️ Log ticket:', err?.message); }
@@ -527,101 +550,173 @@ async function handleTicketSetup(interaction) {
     ].filter(Boolean).join('\n') });
 }
 
-// FIX PRINCIPAL: abrirTicket recibe la interacción ya deferida/respondida
-// y NUNCA llama reply/deferReply por sí mismo — usa safeReply que detecta el estado.
+// ─── FIX PRINCIPAL TICKETS ────────────────────────────────────────────────────
+// Flujo correcto y definitivo:
+// 1. Select menu SIN modal → deferReply ephemeral → abrirTicket → editReply
+// 2. Select menu CON modal → showModal INMEDIATO (sin ningún await antes)
+// 3. Modal submit → deferReply ephemeral → abrirTicket → editReply
+// 4. Botón cerrar → cerrarTicket (maneja su propio defer)
+//
+// REGLA CRÍTICA: showModal() debe ser la primera respuesta a la interacción.
+// Nunca hacer await de nada antes de showModal().
+
 async function abrirTicket(interaction, categoriaKey, datosModal = null) {
     const guild = interaction.guild;
     const user  = interaction.user;
-    const tdata = loadTickets(guild.id);
     const cat   = CATEGORIAS[categoriaKey];
 
-    // Ticket ya abierto
-    const ticketAbierto = tdata.tickets.find(t => t.userId === user.id && t.estado === 'abierto');
-    if (ticketAbierto) {
-        const existe = guild.channels.cache.get(ticketAbierto.channelId) ?? await guild.channels.fetch(ticketAbierto.channelId).catch(() => null);
-        if (existe) return safeReply(interaction, { content: `⚠️ Ya tienes un ticket abierto: <#${ticketAbierto.channelId}>` });
-        ticketAbierto.estado = 'cerrado'; ticketAbierto.cerradoPor = 'Sistema'; ticketAbierto.cerradoAt = Date.now();
-        saveTickets(guild.id, tdata);
+    // FIX DOBLE TICKET: lock por usuario+guild
+    const lockKey = `${guild.id}-${user.id}`;
+    if (ticketLocks.has(lockKey)) {
+        return safeReply(interaction, { content: `${E.relojArena} Ya se está procesando tu ticket, espera un momento...` });
     }
+    ticketLocks.add(lockKey);
 
-    // Cooldown
-    if (!tdata.cooldowns) tdata.cooldowns = {};
-    const restante = (10 * 60 * 1000) - (Date.now() - (tdata.cooldowns[user.id] ?? 0));
-    if (restante > 0 && tdata.cooldowns[user.id])
-        return safeReply(interaction, { content: `${E.relojArena} Espera **${Math.ceil(restante / 60000)} min** antes de abrir otro ticket.` });
+    try {
+        // Leer desde disco (fresh) para evitar datos desactualizados
+        const tdata = loadTickets(guild.id);
 
-    // Permisos del bot
-    const botMember = guild.members.me;
-    if (!botMember.permissions.has(PermissionFlagsBits.ManageChannels))
-        return safeReply(interaction, { content: '⚠️ **Faltan permisos.** El bot necesita **Gestionar canales**.' });
+        // Ticket ya abierto: verificar si el canal sigue existiendo
+        const ticketAbierto = tdata.tickets.find(t => t.userId === user.id && t.estado === 'abierto');
+        if (ticketAbierto) {
+            // Intentar fetch real del canal para estar seguros
+            const existe = await guild.channels.fetch(ticketAbierto.channelId).catch(() => null);
+            if (existe) {
+                return safeReply(interaction, { content: `⚠️ Ya tienes un ticket abierto: <#${ticketAbierto.channelId}>` });
+            }
+            // Canal no existe, marcar como cerrado
+            ticketAbierto.estado = 'cerrado';
+            ticketAbierto.cerradoPor = 'Sistema (canal eliminado)';
+            ticketAbierto.cerradoAt = Date.now();
+            saveTickets(guild.id, tdata);
+        }
 
-    // Crear canal
-    const nombreCanal = `${cat.prefijo}-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) || 'usuario'}`;
-    const permisos = [
-        { id: guild.id,     deny:  [PermissionFlagsBits.ViewChannel] },
-        { id: user.id,      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-        { id: botMember.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageChannels] }
-    ];
-    if (tdata.config.staffRoleId)    permisos.push({ id: tdata.config.staffRoleId,    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] });
-    if (categoriaKey === 'comprar' && tdata.config.vendedorRoleId) permisos.push({ id: tdata.config.vendedorRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
+        // Cooldown (leer fresh después de posible modificación)
+        const tdataFresh = loadTickets(guild.id);
+        if (!tdataFresh.cooldowns) tdataFresh.cooldowns = {};
+        const ultimoTicket = tdataFresh.cooldowns[user.id] ?? 0;
+        const restante = (10 * 60 * 1000) - (Date.now() - ultimoTicket);
+        if (restante > 0 && ultimoTicket > 0) {
+            return safeReply(interaction, { content: `${E.relojArena} Espera **${Math.ceil(restante / 60000)} min** antes de abrir otro ticket.` });
+        }
 
-    const canalTicket = await guild.channels.create({ name: nombreCanal, type: ChannelType.GuildText, parent: tdata.config.categoryId ?? null, permissionOverwrites: permisos });
-    const ticketId = tdata.tickets.length + 1;
-    tdata.tickets.push({ id: ticketId, channelId: canalTicket.id, userId: user.id, userTag: user.tag, categoria: categoriaKey, estado: 'abierto', timestamp: Date.now(), datosModal, ultimaActividad: Date.now(), recordatorioEnviado: false });
-    saveTickets(guild.id, tdata);
+        // Permisos del bot
+        const botMember = guild.members.me;
+        if (!botMember.permissions.has(PermissionFlagsBits.ManageChannels)) {
+            return safeReply(interaction, { content: '⚠️ **Faltan permisos.** El bot necesita **Gestionar canales**.' });
+        }
 
-    // Mensaje de bienvenida
-    let descripcion = cat.bienvenida(user.username);
-    if (datosModal) {
-        descripcion +=
-            `\n\n**📋 Datos de tu pedido:**\n` +
-            `${E.arrow} ${E.money} **Cantidad:**    \`${datosModal.cantidad}\`\n` +
-            `${E.arrow} 💵 **Presupuesto:** \`${datosModal.precio}\`\n` +
-            `${E.arrow} ${E.tarjeta} **Método:**      \`${datosModal.metodo}\``;
+        // Crear canal
+        const nombreCanal = `${cat.prefijo}-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) || 'usuario'}`;
+        const permisos = [
+            { id: guild.id,     deny:  [PermissionFlagsBits.ViewChannel] },
+            { id: user.id,      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+            { id: botMember.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageChannels] }
+        ];
+        if (tdataFresh.config.staffRoleId)    permisos.push({ id: tdataFresh.config.staffRoleId,    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] });
+        if (categoriaKey === 'comprar' && tdataFresh.config.vendedorRoleId) permisos.push({ id: tdataFresh.config.vendedorRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
+
+        const canalTicket = await guild.channels.create({
+            name: nombreCanal,
+            type: ChannelType.GuildText,
+            parent: tdataFresh.config.categoryId ?? null,
+            permissionOverwrites: permisos
+        });
+
+        const ticketId = tdataFresh.tickets.length + 1;
+        tdataFresh.tickets.push({
+            id: ticketId,
+            channelId: canalTicket.id,
+            userId: user.id,
+            userTag: user.tag,
+            categoria: categoriaKey,
+            estado: 'abierto',
+            timestamp: Date.now(),
+            datosModal,
+            ultimaActividad: Date.now(),
+            recordatorioEnviado: false
+        });
+        // Registrar cooldown
+        tdataFresh.cooldowns[user.id] = Date.now();
+        saveTickets(guild.id, tdataFresh);
+
+        // Mensaje de bienvenida
+        let descripcion = cat.bienvenida(user.username);
+        if (datosModal) {
+            descripcion +=
+                `\n\n**📋 Datos de tu pedido:**\n` +
+                `${E.arrow} ${E.money} **Cantidad:**    \`${datosModal.cantidad}\`\n` +
+                `${E.arrow} 💵 **Presupuesto:** \`${datosModal.precio}\`\n` +
+                `${E.arrow} ${E.tarjeta} **Método:**      \`${datosModal.metodo}\``;
+        }
+        const embedBienvenida = new EmbedBuilder()
+            .setColor(cat.color)
+            .setImage(BANNER_URL)
+            .setDescription(descripcion)
+            .setFooter({ text: `${E.ticket} Ticket #${ticketId} • ${guild.name} · Aurex` })
+            .setTimestamp();
+        const rowCerrar = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`ticket_cerrar_${ticketId}`).setLabel('🔒 Cerrar ticket').setStyle(ButtonStyle.Danger)
+        );
+        const menciones = [`<@${user.id}>`];
+        if (categoriaKey === 'comprar' && tdataFresh.config.vendedorRoleId) menciones.push(`<@&${tdataFresh.config.vendedorRoleId}>`);
+        else if (tdataFresh.config.staffRoleId) menciones.push(`<@&${tdataFresh.config.staffRoleId}>`);
+
+        await canalTicket.send({ content: menciones.join(' '), embeds: [embedBienvenida], components: [rowCerrar] });
+
+        await logTicket(guild, tdataFresh, new EmbedBuilder().setColor('#57F287')
+            .setTitle(`${E.ticket}  Ticket #${ticketId} abierto`)
+            .setDescription(
+                `${E.arrow} 👤 **Usuario:**   <@${user.id}> (\`${user.tag}\`)\n` +
+                `${E.arrow} 🗂️ **Categoría:** ${cat.emoji} \`${cat.label}\`\n` +
+                `${E.arrow} 📌 **Canal:**     <#${canalTicket.id}>`
+            ).setTimestamp());
+
+        return safeReply(interaction, { content: `${E.check} Tu ticket fue creado: <#${canalTicket.id}>` });
+
+    } finally {
+        // SIEMPRE liberar el lock, pase lo que pase
+        ticketLocks.delete(lockKey);
     }
-    const embedBienvenida = new EmbedBuilder().setColor(cat.color).setImage(BANNER_URL).setDescription(descripcion).setFooter({ text: `${E.ticket} Ticket #${ticketId} • ${guild.name} · Aurex` }).setTimestamp();
-    const rowCerrar = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`ticket_cerrar_${ticketId}`).setLabel('🔒 Cerrar ticket').setStyle(ButtonStyle.Danger));
-    const menciones = [`<@${user.id}>`];
-    if (categoriaKey === 'comprar' && tdata.config.vendedorRoleId) menciones.push(`<@&${tdata.config.vendedorRoleId}>`);
-    else if (tdata.config.staffRoleId) menciones.push(`<@&${tdata.config.staffRoleId}>`);
-    await canalTicket.send({ content: menciones.join(' '), embeds: [embedBienvenida], components: [rowCerrar] });
-
-    await logTicket(guild, tdata, new EmbedBuilder().setColor('#57F287')
-        .setTitle(`${E.ticket}  Ticket #${ticketId} abierto`)
-        .setDescription(
-            `${E.arrow} 👤 **Usuario:**   <@${user.id}> (\`${user.tag}\`)\n` +
-            `${E.arrow} 🗂️ **Categoría:** ${cat.emoji} \`${cat.label}\`\n` +
-            `${E.arrow} 📌 **Canal:**     <#${canalTicket.id}>`
-        ).setTimestamp());
-
-    // FIX: solo safeReply, nunca reply directo aquí
-    return safeReply(interaction, { content: `${E.check} Tu ticket fue creado: <#${canalTicket.id}>` });
 }
 
 async function cerrarTicket(interaction, ticketId) {
     const guild  = interaction.guild;
+    // Leer fresh desde disco
     const tdata  = loadTickets(guild.id);
     const ticket = tdata.tickets.find(t => t.id === ticketId);
-    if (!ticket || ticket.estado === 'cerrado') return safeReply(interaction, { content: '⚠️ Este ticket ya fue cerrado.' });
+    if (!ticket || ticket.estado === 'cerrado')
+        return safeReply(interaction, { content: '⚠️ Este ticket ya fue cerrado.' });
     const esAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
     const esStaff = tdata.config.staffRoleId ? interaction.member.roles.cache.has(tdata.config.staffRoleId) : false;
-    if (!esAdmin && !esStaff && interaction.user.id !== ticket.userId) return safeReply(interaction, { content: '🚫 Sin permiso para cerrar este ticket.' });
+    if (!esAdmin && !esStaff && interaction.user.id !== ticket.userId)
+        return safeReply(interaction, { content: '🚫 Sin permiso para cerrar este ticket.' });
     const ok = await safeDefer(interaction);
     if (!ok) return;
     const mensajes = await interaction.channel.messages.fetch({ limit: 100 });
     const cat = CATEGORIAS[ticket.categoria];
     let transcript = `TRANSCRIPT — Ticket #${ticket.id} (${cat.label})\nUsuario: ${ticket.userTag}\nCerrado por: ${interaction.user.tag}\nFecha: ${new Date().toLocaleString('es-MX')}\nDuración: ${calcDuracion(ticket.timestamp, Date.now())}\n${'─'.repeat(60)}\n\n`;
-    mensajes.reverse().forEach(m => { if (m.author.bot) return; transcript += `[${new Date(m.createdTimestamp).toLocaleString('es-MX')}] ${m.author.tag}: ${m.content}\n`; if (m.embeds.length > 0) transcript += `  [embed]\n`; });
-    if (!tdata.cooldowns) tdata.cooldowns = {};
-    tdata.cooldowns[ticket.userId] = Date.now();
-    ticket.estado = 'cerrado'; ticket.cerradoPor = interaction.user.tag; ticket.cerradoAt = Date.now();
+    mensajes.reverse().forEach(m => {
+        if (m.author.bot) return;
+        transcript += `[${new Date(m.createdTimestamp).toLocaleString('es-MX')}] ${m.author.tag}: ${m.content}\n`;
+        if (m.embeds.length > 0) transcript += `  [embed]\n`;
+    });
+    ticket.estado     = 'cerrado';
+    ticket.cerradoPor = interaction.user.tag;
+    ticket.cerradoAt  = Date.now();
     saveTickets(guild.id, tdata);
+
     await interaction.editReply({ embeds: [new EmbedBuilder().setColor('#ED4245').setTitle('🔒  Ticket cerrado')
-        .setDescription(`${E.arrow} Cerrado por <@${interaction.user.id}>\n${E.arrow} El canal se eliminará en **5 segundos**.`)
-        .setTimestamp()] });
+        .setDescription(
+            `${E.arrow} Cerrado por <@${interaction.user.id}>\n` +
+            `${E.arrow} El canal se eliminará en **5 segundos**.`
+        ).setTimestamp()] });
+
+    // DM al usuario
     try {
         const gdata = loadData(guild.id);
-        const dmTexto = gdata.config.dmCierreTexto ?? `¡Hola, **{usuario}**! 👋\n\nEsperamos haberte atendido de la mejor manera en **{servidor}**.\n\n*Si tuviste algún inconveniente, abre un nuevo ticket.*\n\n¡Gracias por confiar en nosotros! 💙`;
+        const dmTexto = gdata.config.dmCierreTexto
+            ?? `¡Hola, **{usuario}**! 👋\n\nEsperamos haberte atendido de la mejor manera en **{servidor}**.\n\n*Si tuviste algún inconveniente, abre un nuevo ticket.*\n\n¡Gracias por confiar en nosotros! 💙`;
         const embedDM = new EmbedBuilder().setColor('#5865F2')
             .setAuthor({ name: guild.name, iconURL: guild.iconURL({ dynamic: true }) ?? undefined })
             .setTitle(`${E.ticket}  Tu ticket fue cerrado`)
@@ -635,9 +730,10 @@ async function cerrarTicket(interaction, ticketId) {
                 dmTexto.replace('{usuario}', ticket.userTag.split('#')[0]).replace('{servidor}', guild.name)
             ).setFooter({ text: `${guild.name} · powered by Aurex` }).setTimestamp();
         const buffer = Buffer.from(transcript, 'utf8');
-        const miembro = guild.members.cache.get(ticket.userId) ?? await guild.members.fetch(ticket.userId).catch(() => null);
+        const miembro = await guild.members.fetch(ticket.userId).catch(() => null);
         if (miembro) await enviarDM(miembro.user, embedDM, { files: [{ attachment: buffer, name: `transcript-ticket${ticketId}.txt` }] });
     } catch { console.warn('⚠️ DM cierre fallido'); }
+
     const buffer = Buffer.from(transcript, 'utf8');
     await logTicket(guild, tdata,
         new EmbedBuilder().setColor('#ED4245').setTitle(`${E.ticket}  Ticket #${ticketId} cerrado`)
@@ -652,28 +748,40 @@ async function cerrarTicket(interaction, ticketId) {
     setTimeout(() => { interaction.channel.delete().catch(() => {}); }, 5000);
 }
 
-// ─── FIX: handleTicketInteraction sin doble defer/reply ───────────────────────
-// El flujo correcto:
-// StringSelectMenu (sin modal) → deferReply UNA sola vez aquí → abrirTicket (usa safeReply → editReply)
-// StringSelectMenu (con modal)  → showModal (NO deferReply antes) → modal submit → deferReply → abrirTicket
+// ─── FIX DEFINITIVO: handleTicketInteraction ──────────────────────────────────
 async function handleTicketInteraction(interaction) {
+
     // ── Select menu ──────────────────────────────────────────────────────────
     if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_categoria') {
         const categoriaKey = interaction.values[0];
         const cat = CATEGORIAS[categoriaKey];
 
         if (cat.modal) {
-            // NO hacer defer antes de showModal — Discord no lo permite
-            const modal = new ModalBuilder().setCustomId(`ticket_modal_${categoriaKey}`).setTitle(`Ticket — ${cat.label}`);
+            // ⚠️ REGLA CRÍTICA: showModal debe ser la PRIMERA y ÚNICA respuesta.
+            // No hacer ningún await antes. No defer. No reply. Solo showModal.
+            const modal = new ModalBuilder()
+                .setCustomId(`ticket_modal_${categoriaKey}`)
+                .setTitle(`Ticket — ${cat.label}`);
             modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('cantidad').setLabel('¿Cuánto deseas adquirir?').setPlaceholder('Ej: 1000, 5k').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('precio').setLabel('¿Cuál es tu presupuesto?').setPlaceholder('Ej: $5 USD, 130 MXN').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('metodo').setLabel('¿Método de pago?').setPlaceholder('Ej: PayPal, Binance, Mercado Pago').setStyle(TextInputStyle.Short).setRequired(true))
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('cantidad').setLabel('¿Cuánto deseas adquirir?').setPlaceholder('Ej: 1000, 5k').setStyle(TextInputStyle.Short).setRequired(true)
+                ),
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('precio').setLabel('¿Cuál es tu presupuesto?').setPlaceholder('Ej: $5 USD, 130 MXN').setStyle(TextInputStyle.Short).setRequired(true)
+                ),
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('metodo').setLabel('¿Método de pago?').setPlaceholder('Ej: PayPal, Binance, Mercado Pago').setStyle(TextInputStyle.Short).setRequired(true)
+                )
             );
-            return interaction.showModal(modal);
+            try {
+                await interaction.showModal(modal);
+            } catch (e) {
+                if (e?.code !== 10062 && e?.code !== 40060) console.warn('⚠️ showModal error:', e?.message);
+            }
+            return;
         }
 
-        // Sin modal: defer UNA vez, luego abrirTicket usa safeReply → editReply
+        // Sin modal: defer ephemeral, luego abrirTicket
         const ok = await safeDefer(interaction, true);
         if (!ok) return;
         return abrirTicket(interaction, categoriaKey);
@@ -691,12 +799,15 @@ async function handleTicketInteraction(interaction) {
     }
 
     // ── Botón cerrar ─────────────────────────────────────────────────────────
-    if (interaction.isButton() && interaction.customId.startsWith('ticket_cerrar_'))
+    if (interaction.isButton() && interaction.customId.startsWith('ticket_cerrar_')) {
         return cerrarTicket(interaction, parseInt(interaction.customId.replace('ticket_cerrar_', '')));
+    }
 }
 
 // ─── Stock bulk ───────────────────────────────────────────────────────────────
 async function handleStockBulkModal(interaction) {
+    const ok = await safeDefer(interaction, true);
+    if (!ok) return;
     const texto = interaction.fields.getTextInputValue('items_texto');
     const modo  = interaction.fields.getTextInputValue('modo_valor').trim().toLowerCase();
     const modoFinal = (modo === 'r' || modo === 'reemplazar') ? 'reemplazar' : 'agregar';
@@ -714,8 +825,11 @@ async function handleStockBulkModal(interaction) {
         const cantidad = partes[1] ? parseInt(partes[1]) : 0;
         const precio = partes[2] || null; const notas = partes[3] || null;
         const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre.toLowerCase());
-        if (idx !== -1) { data.stock[idx] = { nombre, cantidad: isNaN(cantidad) ? data.stock[idx].cantidad : cantidad, precio: precio ?? data.stock[idx].precio, notas: notas ?? data.stock[idx].notas }; }
-        else data.stock.push({ nombre, cantidad: isNaN(cantidad) ? 0 : cantidad, precio, notas });
+        if (idx !== -1) {
+            data.stock[idx] = { nombre, cantidad: isNaN(cantidad) ? data.stock[idx].cantidad : cantidad, precio: precio ?? data.stock[idx].precio, notas: notas ?? data.stock[idx].notas };
+        } else {
+            data.stock.push({ nombre, cantidad: isNaN(cantidad) ? 0 : cantidad, precio, notas });
+        }
         agregados.push(nombre);
     }
     saveData(interaction.guild.id, data);
@@ -799,7 +913,11 @@ async function handleSorteoParticipar(interaction, sorteoId) {
         );
         await interaction.message.edit({ embeds: [buildSorteoEmbed(sorteo, interaction.guild.name)], components: [rowSorteo] }).catch(() => {});
     } catch { /* no crítico */ }
-    return safeReply(interaction, { content: `🎟️ ¡Participas con **${entradas}** entrada(s)!${esVip ? `\n> ${E.diamante} **Bonus VIP:** Doble entradas aplicadas.` : `\n${E.line} *Más compras = más entradas (máx. 10)*`}` });
+    return safeReply(interaction, {
+        content: `🎟️ ¡Participas con **${entradas}** entrada(s)!${esVip
+            ? `\n> ${E.diamante} **Bonus VIP:** Doble entradas aplicadas.`
+            : `\n${E.line} *Más compras = más entradas (máx. 10)*`}`
+    });
 }
 
 async function handleSorteoFinalizar(interaction, sorteoId) {
@@ -1011,7 +1129,8 @@ async function verificarRecordatorios() {
                 const ultimaActividad = ticket.ultimaActividad ?? ticket.timestamp;
                 if (ahora - ultimaActividad >= LIMITE_MS && !ticket.recordatorioEnviado) {
                     try {
-                        const canal = guild.channels.cache.get(ticket.channelId) ?? await guild.channels.fetch(ticket.channelId).catch(() => null);
+                        const canal = guild.channels.cache.get(ticket.channelId)
+                            ?? await guild.channels.fetch(ticket.channelId).catch(() => null);
                         if (!canal) continue;
                         const cat = CATEGORIAS[ticket.categoria] ?? { emoji: '🎫', label: 'Ticket' };
                         await canal.send({
@@ -1037,28 +1156,39 @@ function actualizarActividadTicket(guildId, channelId) {
         const tdata = loadTickets(guildId);
         const ticket = tdata.tickets.find(t => t.channelId === channelId && t.estado === 'abierto');
         if (!ticket) return;
-        ticket.ultimaActividad = Date.now(); ticket.recordatorioEnviado = false;
+        ticket.ultimaActividad = Date.now();
+        ticket.recordatorioEnviado = false;
         saveTickets(guildId, tdata);
     } catch { /* no crítico */ }
 }
 
 // ─── Cliente Discord ──────────────────────────────────────────────────────────
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers]
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers
+    ]
 });
-client.on('error', (err) => { if (err?.code === 10062) return; console.error('❌ [Client]', err?.message); });
+
+client.on('error', (err) => {
+    if (err?.code === 10062) return;
+    console.error('❌ [Client]', err?.message);
+});
+
+// FIX: clientReady en lugar de ready (deprecated en v15)
 client.once('clientReady', () => {
     console.log(`✅ Bot listo como ${client.user.tag}`);
     client.user.setActivity('Aurex • /help 💎', { type: 3 });
-    setInterval(() => console.log(`💓 Keep-alive • ${new Date().toLocaleString('es-MX')} • ${client.ws.ping}ms`), 5 * 60 * 1000);
+    setInterval(() => {
+        console.log(`💓 Keep-alive • ${new Date().toLocaleString('es-MX')} • ${client.ws.ping}ms`);
+    }, 5 * 60 * 1000);
     setInterval(verificarRecordatorios, 5 * 60 * 1000);
 });
 
-// ─── Sistema AFK estilo Apollo ────────────────────────────────────────────────
-// Guarda: motivo, timestamp, menciones[], mensajes recibidos mientras AFK
-// Al volver: muestra resumen completo con todas las menciones y tiempo ausente
-// Timeout configurable: si lleva más de 24h AFK se limpia automáticamente
-const AFK_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24 horas
+// ─── Sistema AFK ──────────────────────────────────────────────────────────────
+const AFK_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
@@ -1066,7 +1196,7 @@ client.on('messageCreate', async (message) => {
 
     const data = loadData(message.guild.id);
 
-    // ── Limpiar AFKs expirados (>24h) ────────────────────────────────────
+    // Limpiar AFKs expirados (>24h)
     const ahora = Date.now();
     let limpiado = false;
     for (const [uid, afkInfo] of Object.entries(data.afk ?? {})) {
@@ -1077,7 +1207,7 @@ client.on('messageCreate', async (message) => {
     }
     if (limpiado) saveData(message.guild.id, data);
 
-    // ── Volver del AFK ────────────────────────────────────────────────────
+    // Volver del AFK
     if (data.afk[message.author.id]) {
         const afkInfo = data.afk[message.author.id];
         const duracion = tiempoRelativo(Date.now() - afkInfo.tiempo);
@@ -1085,7 +1215,7 @@ client.on('messageCreate', async (message) => {
         delete data.afk[message.author.id];
         saveData(message.guild.id, data);
 
-        // Intentar renombrar el nick si tiene el prefijo AFK
+        // Quitar prefijo [AFK] del nick
         try {
             const miembro = message.guild.members.cache.get(message.author.id);
             if (miembro && miembro.nickname?.startsWith('[AFK] ')) {
@@ -1100,7 +1230,6 @@ client.on('messageCreate', async (message) => {
 
         if (menciones.length > 0) {
             desc += `\n**${E.campana} Te mencionaron ${menciones.length} vez${menciones.length > 1 ? 'es' : ''}:**\n`;
-            // Mostrar las últimas 10 menciones máximo
             const recientes = menciones.slice(-10);
             for (const m of recientes) {
                 desc += `${E.line} **[${m.tag}](${m.url})** en <#${m.channelId}> — <t:${Math.floor(m.timestamp / 1000)}:R>\n`;
@@ -1111,6 +1240,7 @@ client.on('messageCreate', async (message) => {
             desc += `\n${E.line} *Nadie te mencionó mientras estabas ausente.*`;
         }
 
+        // FIX: respuesta pública al volver del AFK (sin flags:64)
         await message.reply({
             embeds: [new EmbedBuilder()
                 .setColor('#57F287')
@@ -1122,15 +1252,13 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
-    // ── Registrar mención a usuarios AFK ─────────────────────────────────
+    // Registrar mención a usuarios AFK
     if (message.mentions.users.size > 0) {
         let modificado = false;
         for (const [, usuario] of message.mentions.users) {
             if (!data.afk[usuario.id] || message.author.id === usuario.id) continue;
             const afkInfo = data.afk[usuario.id];
             if (!afkInfo.menciones) afkInfo.menciones = [];
-
-            // Guardar datos ricos de la mención
             afkInfo.menciones.push({
                 tag:       message.author.tag,
                 userId:    message.author.id,
@@ -1140,8 +1268,8 @@ client.on('messageCreate', async (message) => {
                 contenido: message.content.replace(/<@!?\d+>/g, '').trim() || null
             });
             modificado = true;
-
             const durAFK = tiempoRelativo(Date.now() - afkInfo.tiempo);
+            // FIX: aviso de AFK también público
             await message.reply({
                 embeds: [new EmbedBuilder()
                     .setColor('#ED4245')
@@ -1157,12 +1285,12 @@ client.on('messageCreate', async (message) => {
         if (modificado) saveData(message.guild.id, data);
     }
 
-    // ── Mención al bot ────────────────────────────────────────────────────
+    // Mención al bot
     if (message.mentions.has(client.user)) {
         await message.reply({
             embeds: [new EmbedBuilder()
                 .setColor('#5865F2')
-                .setDescription(`### ${E.bot}  ¡Hola!\n\n${E.arrow} Usa \`/help\` para ver todos mis comandos.`)]
+                .setDescription(`### ${E.bot}  ¡Hola!\n\n${E.arrow} Usa \`/help\` para ver todos mis comandos.\n${E.arrow} Prefijo de texto: \`$\``)]
         }).catch(() => {});
         return;
     }
@@ -1171,11 +1299,22 @@ client.on('messageCreate', async (message) => {
     if (!message.content.startsWith(PREFIX)) return;
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const cmd  = args.shift().toLowerCase();
-    if (cmd === 'ping') return message.reply(`🏓 Pong! \`${Math.round(client.ws.ping)}ms\``).catch(() => {});
+
+    if (cmd === 'ping') {
+        return message.reply(`🏓 Pong! \`${Math.round(client.ws.ping)}ms\``).catch(() => {});
+    }
+
+    if (cmd === 'help') {
+        return message.reply({
+            embeds: [buildHelpInicio(message.guild)],
+            components: buildHelpRows()
+        }).catch(() => {});
+    }
 });
 
 // ─── Interactions ─────────────────────────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
+
     // ── Tickets ───────────────────────────────────────────────────────────
     if (
         (interaction.isStringSelectMenu() && interaction.customId === 'ticket_categoria') ||
@@ -1211,12 +1350,19 @@ client.on('interactionCreate', async (interaction) => {
             const ordenId = parseInt(interaction.customId.split('_')[2]);
             const data = loadData(interaction.guild.id);
             const venta = data.ventas.find(v => v.id === ordenId);
-            if (!venta || venta.estado === 'cancelada') return interaction.update({ content: '⚠️ Esta orden ya fue procesada.', components: [] });
+            if (!venta || venta.estado === 'cancelada')
+                return interaction.update({ content: '⚠️ Esta orden ya fue procesada.', components: [] });
             venta.estado = 'cancelada';
             data.analytics.totalVentas = Math.max(0, data.analytics.totalVentas - 1);
             data.analytics.totalRobux  = Math.max(0, data.analytics.totalRobux - venta.robux);
-            if (data.analytics.porVendedor[venta.vendedorId]) { data.analytics.porVendedor[venta.vendedorId].ventas--; data.analytics.porVendedor[venta.vendedorId].robux -= venta.robux; }
-            if (data.analytics.porCliente?.[venta.clienteId]) { data.analytics.porCliente[venta.clienteId].compras--; data.analytics.porCliente[venta.clienteId].robux -= venta.robux; }
+            if (data.analytics.porVendedor[venta.vendedorId]) {
+                data.analytics.porVendedor[venta.vendedorId].ventas--;
+                data.analytics.porVendedor[venta.vendedorId].robux -= venta.robux;
+            }
+            if (data.analytics.porCliente?.[venta.clienteId]) {
+                data.analytics.porCliente[venta.clienteId].compras--;
+                data.analytics.porCliente[venta.clienteId].robux -= venta.robux;
+            }
             saveData(interaction.guild.id, data);
             return interaction.update({ embeds: [new EmbedBuilder().setColor('#ED4245').setTitle('❌  Orden cancelada')
                 .setDescription(
@@ -1236,14 +1382,16 @@ client.on('interactionCreate', async (interaction) => {
             const ordenId = parseInt(interaction.customId.split('_')[1]);
             const data = loadData(interaction.guild.id);
             const venta = data.ventas.find(v => v.id === ordenId);
-            if (!venta || interaction.user.id !== venta.clienteId) return safeReply(interaction, { content: '⚠️ Solo el cliente puede dejar reseña.' });
-            if (data.resenas.find(r => r.ordenId === ordenId)) return safeReply(interaction, { content: '⚠️ Ya dejaste una reseña para esta orden.' });
+            if (!venta || interaction.user.id !== venta.clienteId)
+                return safeReply(interaction, { content: '⚠️ Solo el cliente puede dejar reseña.' });
+            if (data.resenas.find(r => r.ordenId === ordenId))
+                return safeReply(interaction, { content: '⚠️ Ya dejaste una reseña para esta orden.' });
             const modal = new ModalBuilder().setCustomId(`modal_resena_${ordenId}`).setTitle(`⭐ Reseña — Orden #${ordenId}`);
             modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('estrellas').setLabel('Calificación (1 a 5 ⭐)').setPlaceholder('Número del 1 al 5').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1)),
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('comentario').setLabel('Comentario (opcional)').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(300).setPlaceholder('Cuéntanos tu experiencia...')),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('imagen_url').setLabel('URL de imagen / prueba (opcional)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('https://imgur.com/...'))
-            );
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('imagen_url').setLabel('URL de imagen / prueba (opcional)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('https://imgur.com/...')))
+            ;
             return interaction.showModal(modal);
         });
     }
@@ -1291,8 +1439,10 @@ client.on('interactionCreate', async (interaction) => {
 
         if (interaction.commandName === 'help')
             return interaction.reply({ embeds: [buildHelpInicio(guild)], components: buildHelpRows(), flags: 64 });
+
         if (interaction.commandName === 'ping')
             return safeReply(interaction, { content: `🏓 Pong! \`${Math.round(client.ws.ping)}ms\`` });
+
         if (interaction.commandName === 'ticket-setup') return handleTicketSetup(interaction);
         if (interaction.commandName === 'sorteo')        return handleSorteo(interaction);
         if (interaction.commandName === 'notificar')     return handleNotificar(interaction);
@@ -1312,7 +1462,8 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.commandName === 'settiers') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return safeReply(interaction, { content: '🚫 Solo administradores.' });
             const rolBronce = interaction.options.getRole('bronce');
             const rolPlata  = interaction.options.getRole('plata');
             const rolOro    = interaction.options.getRole('oro');
@@ -1360,11 +1511,20 @@ client.on('interactionCreate', async (interaction) => {
             data.analytics.porCliente[clienteU.id].robux += robux;
             saveData(guild.id, data);
             await actualizarTier(guild, clienteU.id, data.analytics.porCliente[clienteU.id].compras, data.config.tierRoles);
-            const rowResena = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`reseña_${n}`).setLabel('⭐ Dejar reseña').setStyle(ButtonStyle.Secondary));
+            const rowResena = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`reseña_${n}`).setLabel('⭐ Dejar reseña').setStyle(ButtonStyle.Secondary)
+            );
             await interaction.reply({ embeds: [buildVentaPublicaEmbed(venta, n)], components: [rowResena] });
             if (data.config.dmEnabled) await enviarDM(clienteU, buildDMVentaEmbed(venta, n, guild.name, guild.iconURL({ dynamic: true })));
-            if (data.config.logChannelId) { const lc = guild.channels.cache.get(data.config.logChannelId); if (lc) await lc.send({ embeds: [buildLogEmbed(venta, n)] }).catch(() => {}); }
-            if (data.analytics.totalVentas % 10 === 0) await interaction.followUp({ embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle('🏆  ¡Hito alcanzado!').setDescription(`${E.arrow} **${guild.name}** alcanzó **${data.analytics.totalVentas}** pedidos.\n${E.arrow} ${E.money} Total: \`${formatRobux(data.analytics.totalRobux)}\``)] }).catch(() => {});
+            if (data.config.logChannelId) {
+                const lc = guild.channels.cache.get(data.config.logChannelId);
+                if (lc) await lc.send({ embeds: [buildLogEmbed(venta, n)] }).catch(() => {});
+            }
+            if (data.analytics.totalVentas % 10 === 0) {
+                await interaction.followUp({ embeds: [new EmbedBuilder().setColor('#FEE75C')
+                    .setTitle('🏆  ¡Hito alcanzado!')
+                    .setDescription(`${E.arrow} **${guild.name}** alcanzó **${data.analytics.totalVentas}** pedidos.\n${E.arrow} ${E.money} Total: \`${formatRobux(data.analytics.totalRobux)}\``)] }).catch(() => {});
+            }
             return;
         }
 
@@ -1420,7 +1580,10 @@ client.on('interactionCreate', async (interaction) => {
             const ultimas = ventas.slice(-10).reverse();
             return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`${E.orders}  Historial — ${guild.name}`)
                 .setDescription(
-                    ultimas.map(v => { const t = v.estado === 'cancelada' ? '~~' : ''; return `${E.line} \`#${v.id}\` ${t}**${v.producto}**${t} — \`${formatRobux(v.robux)}\` — <@${v.clienteId}>`; }).join('\n') +
+                    ultimas.map(v => {
+                        const t = v.estado === 'cancelada' ? '~~' : '';
+                        return `${E.line} \`#${v.id}\` ${t}**${v.producto}**${t} — \`${formatRobux(v.robux)}\` — <@${v.clienteId}>`;
+                    }).join('\n') +
                     `\n\n${E.arrow} 🧾 **Total:** \`${ventas.length}\`\n${E.arrow} ${E.money} **R$ movidos:** \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\``
                 ).setFooter({ text: `Últimos ${ultimas.length} de ${ventas.length}` }).setTimestamp()] });
         }
@@ -1457,7 +1620,8 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.commandName === 'cancelar') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
+                return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
             const ordenId = interaction.options.getInteger('orden');
             const venta   = data.ventas.find(v => v.id === ordenId);
             if (!venta) return safeReply(interaction, { content: `⚠️ No existe la orden \`#${ordenId}\`.` });
@@ -1476,7 +1640,8 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.commandName === 'exportar') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
+                return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
             const rango  = interaction.options.getString('rango') ?? 'mes';
             const ventas = ventasPorRango(data.ventas, rango).filter(v => v.estado !== 'cancelada');
             if (ventas.length === 0) return safeReply(interaction, { content: '📭 No hay pedidos en ese período.' });
@@ -1485,7 +1650,11 @@ client.on('interactionCreate', async (interaction) => {
             let texto = `REPORTE — ${etiquetas[rango]}\nServidor: ${guild.name}\nGenerado: ${new Date().toLocaleString('es-MX')}\n${'─'.repeat(60)}\n\n`;
             ventas.forEach(v => { texto += `#${v.id} | ${v.producto} | ${formatRobux(v.robux)} | ${v.precio} | ${v.metodo} | Cliente: ${v.clienteTag} | Operador: ${v.vendedorTag}\n`; });
             texto += `\n${'─'.repeat(60)}\nTOTAL: ${ventas.length} pedidos | ${formatRobux(totalRobux)}\n`;
-            return interaction.reply({ content: `${E.export} **${ventas.length}** pedidos exportados:`, files: [{ attachment: Buffer.from(texto, 'utf8'), name: `pedidos-${rango}.txt` }], flags: 64 });
+            return interaction.reply({
+                content: `${E.export} **${ventas.length}** pedidos exportados:`,
+                files: [{ attachment: Buffer.from(texto, 'utf8'), name: `pedidos-${rango}.txt` }],
+                flags: 64
+            });
         }
 
         if (interaction.commandName === 'perfil') {
@@ -1497,7 +1666,9 @@ client.on('interactionCreate', async (interaction) => {
             const tierCliente  = getTier(data.analytics.porCliente?.[objetivo.id]?.compras ?? 0);
             const miembroObj   = guild.members.cache.get(objetivo.id);
             const esVip        = esClienteVip(miembroObj, data.config?.vipRoleId ?? null);
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`👤  ${objetivo.username}${esVip ? `  ${E.diamante} VIP` : ''}`).setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2')
+                .setTitle(`👤  ${objetivo.username}${esVip ? `  ${E.diamante} VIP` : ''}`)
+                .setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
                 .setDescription(
                     `**Como operador**\n` +
                     `${E.arrow} 🧾 **Pedidos:**    \`${comoVendedor.length}\`\n` +
@@ -1530,13 +1701,25 @@ client.on('interactionCreate', async (interaction) => {
             const por  = interaction.options.getString('por')  ?? 'ventas';
             const medallas = ['🥇', '🥈', '🥉'];
             if (tipo === 'compradores') {
-                const lista = Object.entries(data.analytics.porCliente ?? {}).map(([id, d]) => ({ id, ...d })).filter(c => c.compras > 0).sort((a, b) => por === 'robux' ? b.robux - a.robux : b.compras - a.compras).slice(0, 10);
+                const lista = Object.entries(data.analytics.porCliente ?? {})
+                    .map(([id, d]) => ({ id, ...d }))
+                    .filter(c => c.compras > 0)
+                    .sort((a, b) => por === 'robux' ? b.robux - a.robux : b.compras - a.compras)
+                    .slice(0, 10);
                 if (lista.length === 0) return safeReply(interaction, { content: '📭 Sin compras aún.' });
-                return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.corona}  Top compradores`).setDescription(lista.map((c, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${c.id}> — \`${c.compras}\` compra(s) • \`${formatRobux(c.robux)}\``).join('\n')).setTimestamp()] });
+                return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.corona}  Top compradores`)
+                    .setDescription(lista.map((c, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${c.id}> — \`${c.compras}\` compra(s) • \`${formatRobux(c.robux)}\``).join('\n'))
+                    .setTimestamp()] });
             }
-            const lista = Object.entries(data.analytics.porVendedor).map(([id, d]) => ({ id, ...d })).filter(v => v.ventas > 0).sort((a, b) => por === 'robux' ? b.robux - a.robux : b.ventas - a.ventas).slice(0, 10);
+            const lista = Object.entries(data.analytics.porVendedor)
+                .map(([id, d]) => ({ id, ...d }))
+                .filter(v => v.ventas > 0)
+                .sort((a, b) => por === 'robux' ? b.robux - a.robux : b.ventas - a.ventas)
+                .slice(0, 10);
             if (lista.length === 0) return safeReply(interaction, { content: '📭 Sin pedidos aún.' });
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287').setTitle('🏆  Top operadores').setDescription(lista.map((v, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${v.id}> — \`${v.ventas}\` pedido(s) • \`${formatRobux(v.robux)}\``).join('\n')).setTimestamp()] });
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287').setTitle('🏆  Top operadores')
+                .setDescription(lista.map((v, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${v.id}> — \`${v.ventas}\` pedido(s) • \`${formatRobux(v.robux)}\``).join('\n'))
+                .setTimestamp()] });
         }
 
         if (interaction.commandName === 'dashboard') {
@@ -1547,7 +1730,9 @@ client.on('interactionCreate', async (interaction) => {
             const topC   = data.analytics.porCliente ? Object.entries(data.analytics.porCliente).sort((a, b) => b[1].compras - a[1].compras)[0] : null;
             const totalR = data.resenas?.length ?? 0;
             const prom   = totalR > 0 ? (data.resenas.reduce((s, r) => s + r.estrellas, 0) / totalR).toFixed(1) : null;
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`${E.analytics}  Dashboard — ${guild.name}`).setThumbnail(guild.iconURL({ dynamic: true }) ?? null)
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2')
+                .setTitle(`${E.analytics}  Dashboard — ${guild.name}`)
+                .setThumbnail(guild.iconURL({ dynamic: true }) ?? null)
                 .setDescription(
                     `${E.arrow} 🌅 **Hoy:**         \`${hoy.length}\` pedidos • \`${formatRobux(hoy.reduce((s, v) => s + v.robux, 0))}\`\n` +
                     `${E.arrow} 📅 **Esta semana:** \`${semana.length}\` pedidos • \`${formatRobux(semana.reduce((s, v) => s + v.robux, 0))}\`\n` +
@@ -1559,25 +1744,30 @@ client.on('interactionCreate', async (interaction) => {
                 ).setFooter({ text: 'Aurex' }).setTimestamp()] });
         }
 
-        // ── /afk mejorado (estilo Apollo) ─────────────────────────────────
+        // ── /afk ──────────────────────────────────────────────────────────
         if (interaction.commandName === 'afk') {
             const motivo = interaction.options.getString('motivo') ?? 'Sin motivo';
 
-            // Si ya estaba en AFK, cancelarlo
+            // Si ya estaba en AFK, cancelarlo y activar nuevo
             if (data.afk[user.id]) {
                 const anterior = data.afk[user.id];
                 delete data.afk[user.id];
+                data.afk[user.id] = { motivo, tiempo: Date.now(), menciones: [] };
                 saveData(guild.id, data);
-                return safeReply(interaction, { content: '', embeds: [new EmbedBuilder()
+                // FIX: respuesta pública (sin flags:64)
+                return safeReplyPublic(interaction, { embeds: [new EmbedBuilder()
                     .setColor('#FEE75C')
-                    .setDescription(`### ${E.advertencia}  AFK cancelado\n\n${E.arrow} Tu AFK anterior (*${anterior.motivo}*) fue removido.\n${E.arrow} Ahora tu nuevo AFK está activo: *${motivo}*`)
-                    .setTimestamp()] });
+                    .setDescription(
+                        `### ${E.advertencia}  AFK actualizado\n\n` +
+                        `${E.arrow} AFK anterior removido: *${anterior.motivo}*\n` +
+                        `${E.arrow} Nuevo AFK activo: *${motivo}*`
+                    ).setTimestamp()] });
             }
 
             data.afk[user.id] = { motivo, tiempo: Date.now(), menciones: [] };
             saveData(guild.id, data);
 
-            // Intentar poner prefijo [AFK] en el nick
+            // Poner prefijo [AFK] en nick
             try {
                 const miembro = guild.members.cache.get(user.id);
                 if (miembro && guild.members.me.permissions.has(PermissionFlagsBits.ManageNicknames)) {
@@ -1586,9 +1776,10 @@ client.on('interactionCreate', async (interaction) => {
                         await miembro.setNickname(`[AFK] ${nickActual}`.slice(0, 32)).catch(() => {});
                     }
                 }
-            } catch { /* sin permisos, no crítico */ }
+            } catch { /* sin permisos */ }
 
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder()
+            // FIX: respuesta pública para que todos vean que está AFK
+            return safeReplyPublic(interaction, { embeds: [new EmbedBuilder()
                 .setColor('#3498DB')
                 .setTitle(`💤  AFK activado`)
                 .setDescription(
@@ -1604,19 +1795,31 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.commandName === 'anuncio') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
+                return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
             const imagenUrl = interaction.options.getString('imagen') ?? null;
-            const embed = new EmbedBuilder().setColor('#ED4245').setTitle(`📢  ${interaction.options.getString('titulo')}`).setDescription(interaction.options.getString('mensaje')).setFooter({ text: `Anuncio por ${user.tag} · Aurex` }).setTimestamp();
+            const embed = new EmbedBuilder()
+                .setColor('#ED4245')
+                .setTitle(`📢  ${interaction.options.getString('titulo')}`)
+                .setDescription(interaction.options.getString('mensaje'))
+                .setFooter({ text: `Anuncio por ${user.tag} · Aurex` })
+                .setTimestamp();
             if (imagenUrl) { try { new URL(imagenUrl); embed.setImage(imagenUrl); } catch {} }
             const opts = { embeds: [embed] };
-            const textoBoton = interaction.options.getString('texto_boton'); const enlaceBoton = interaction.options.getString('enlace_boton');
-            if (textoBoton && enlaceBoton) opts.components = [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(textoBoton).setURL(enlaceBoton).setStyle(ButtonStyle.Link))];
+            const textoBoton  = interaction.options.getString('texto_boton');
+            const enlaceBoton = interaction.options.getString('enlace_boton');
+            if (textoBoton && enlaceBoton) {
+                opts.components = [new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setLabel(textoBoton).setURL(enlaceBoton).setStyle(ButtonStyle.Link)
+                )];
+            }
             await safeReply(interaction, { content: '✅ Anuncio enviado.' });
             return interaction.channel.send(opts).catch(() => {});
         }
 
         if (interaction.commandName === 'clear') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
+                return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
             const cantidad = interaction.options.getInteger('cantidad');
             if (cantidad < 1 || cantidad > 100) return safeReply(interaction, { content: '⚠️ Entre 1 y 100.' });
             const deleted = await interaction.channel.bulkDelete(cantidad, true).catch(() => null);
@@ -1624,32 +1827,38 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.commandName === 'setlog') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return safeReply(interaction, { content: '🚫 Solo administradores.' });
             data.config.logChannelId = interaction.options.getChannel('canal').id;
             saveData(guild.id, data);
             return safeReply(interaction, { content: `${E.settings} Canal de logs: <#${data.config.logChannelId}>` });
         }
 
         if (interaction.commandName === 'setresenas') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return safeReply(interaction, { content: '🚫 Solo administradores.' });
             data.config.resenaChannelId = interaction.options.getChannel('canal').id;
             saveData(guild.id, data);
             return safeReply(interaction, { content: `${E.settings} Canal de reseñas: <#${data.config.resenaChannelId}>` });
         }
 
         if (interaction.commandName === 'configdm') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return safeReply(interaction, { content: '🚫 Solo administradores.' });
             data.config.dmEnabled = interaction.options.getBoolean('estado');
             saveData(guild.id, data);
             return safeReply(interaction, { content: `${E.settings} DMs: **${data.config.dmEnabled ? 'activados ✅' : 'desactivados ❌'}**` });
         }
 
         if (interaction.commandName === 'setdm') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return safeReply(interaction, { content: '🚫 Solo administradores.' });
             const texto = interaction.options.getString('texto');
             data.config.dmCierreTexto = texto;
             saveData(guild.id, data);
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287').setTitle(`${E.settings}  Mensaje de cierre actualizado`).setDescription(`${E.line} ${texto.replace(/\n/g, `\n${E.line} `)}\n\n*Variables: \`{usuario}\` \`{servidor}\`*`)] });
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287')
+                .setTitle(`${E.settings}  Mensaje de cierre actualizado`)
+                .setDescription(`${E.line} ${texto.replace(/\n/g, `\n${E.line} `)}\n\n*Variables: \`{usuario}\` \`{servidor}\`*`)] });
         }
 
         if (interaction.commandName === 'stock') {
@@ -1661,11 +1870,16 @@ client.on('interactionCreate', async (interaction) => {
                 `${E.arrow} 💵 Precio:   \`${item.precio ?? 'No especificado'}\`\n` +
                 `${E.arrow} 📝 Notas:    \`${item.notas ?? '—'}\``
             ).join('\n\n');
-            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`${E.stock}  Stock disponible`).setDescription(lineas).setFooter({ text: `${stock.length} ítem(s) • ${guild.name} · Aurex` }).setTimestamp()] });
+            return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#5865F2')
+                .setTitle(`${E.stock}  Stock disponible`)
+                .setDescription(lineas)
+                .setFooter({ text: `${stock.length} ítem(s) • ${guild.name} · Aurex` })
+                .setTimestamp()] });
         }
 
         if (interaction.commandName === 'stock-admin') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return safeReply(interaction, { content: '🚫 Solo administradores.' });
             const accion   = interaction.options.getString('accion');
             const nombre   = interaction.options.getString('nombre');
             const cantidad = interaction.options.getInteger('cantidad');
@@ -1675,7 +1889,9 @@ client.on('interactionCreate', async (interaction) => {
             if (accion === 'agregar') {
                 data.stock.push({ nombre, cantidad: cantidad ?? 0, precio: precio ?? null, notas: notas ?? null });
                 saveData(guild.id, data);
-                return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287').setTitle(`${E.stock}  Ítem agregado`).setDescription(`${E.arrow} ${E.caja} **${nombre}** — \`${cantidad ?? 0}\` unidades — \`${precio ?? 'Sin precio'}\``)] });
+                return safeReply(interaction, { content: '', embeds: [new EmbedBuilder().setColor('#57F287')
+                    .setTitle(`${E.stock}  Ítem agregado`)
+                    .setDescription(`${E.arrow} ${E.caja} **${nombre}** — \`${cantidad ?? 0}\` unidades — \`${precio ?? 'Sin precio'}\``)] });
             }
             if (accion === 'editar') {
                 const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre?.toLowerCase());
@@ -1701,13 +1917,19 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.commandName === 'stock-bulk') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                return safeReply(interaction, { content: '🚫 Solo administradores.' });
             const modal = new ModalBuilder().setCustomId('stock_bulk_modal').setTitle(`${E.caja} Carga masiva de stock`);
             modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('items_texto').setLabel('Ítems — uno por línea').setStyle(TextInputStyle.Paragraph)
-                    .setPlaceholder('Nombre | cantidad | precio | notas\n\nEjemplos:\nRobux 1000 | 10 | $5 USD | Entrega inmediata\nCuenta Premium | 3 | $15 USD').setRequired(true).setMaxLength(3000)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('modo_valor').setLabel('Modo: "agregar" o "reemplazar"').setStyle(TextInputStyle.Short)
-                    .setPlaceholder('agregar').setRequired(false).setMaxLength(10))
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('items_texto').setLabel('Ítems — uno por línea').setStyle(TextInputStyle.Paragraph)
+                        .setPlaceholder('Nombre | cantidad | precio | notas\n\nEjemplos:\nRobux 1000 | 10 | $5 USD | Entrega inmediata\nCuenta Premium | 3 | $15 USD')
+                        .setRequired(true).setMaxLength(3000)
+                ),
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('modo_valor').setLabel('Modo: "agregar" o "reemplazar"').setStyle(TextInputStyle.Short)
+                        .setPlaceholder('agregar').setRequired(false).setMaxLength(10)
+                )
             );
             return interaction.showModal(modal);
         }
