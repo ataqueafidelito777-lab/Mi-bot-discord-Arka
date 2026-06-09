@@ -195,17 +195,19 @@ const ticketLocks = new Set();
 function isIgnorableError(err) {
     if (!err) return true;
     const code = err.code ?? err.status;
-    if ([10062, 40060, 10008, 10003, 50013, 50035].includes(code)) return true;
+    if ([10062, 40060, 10008, 10003, 50013, 50035, 40001, 40002].includes(code)) return true;
     const msg = (err.message ?? '').toLowerCase();
-    if (msg.includes('unknown interaction'))   return true;
-    if (msg.includes('unknown message'))       return true;
-    if (msg.includes('cannot send messages'))  return true;
-    if (msg.includes('missing access'))        return true;
+    if (msg.includes('unknown interaction'))              return true;
+    if (msg.includes('unknown message'))                  return true;
+    if (msg.includes('cannot send messages'))             return true;
+    if (msg.includes('missing access'))                   return true;
     if (msg.includes('interaction has already been acknowledged')) return true;
-    if (msg.includes('the user aborted a request')) return true;
-    if (msg.includes('econnreset'))            return true;
-    if (msg.includes('econnrefused'))          return true;
-    if (msg.includes('etimedout'))             return true;
+    if (msg.includes('the user aborted a request'))       return true;
+    if (msg.includes('econnreset'))                       return true;
+    if (msg.includes('econnrefused'))                     return true;
+    if (msg.includes('etimedout'))                        return true;
+    if (msg.includes('already been acknowledged'))        return true;
+    if (msg.includes('restoreerror'))                     return true;
     return false;
 }
 process.on('unhandledRejection', (err) => {
@@ -1394,6 +1396,8 @@ const client = new Client({
 
 client.on('error', (err) => { if (!isIgnorableError(err)) console.error('❌ [Client]', err?.message); });
 client.on('warn',  (msg) => console.warn('⚠️ [Client warn]', msg));
+client.rest.on('error', (err) => { if (!isIgnorableError(err)) console.warn('⚠️ [REST]', err?.message); });
+client.rest.on('rateLimited', () => {});
 
 client.on('shardDisconnect', (event, id) => {
     console.warn(`⚠️ Shard ${id} desconectado (code: ${event.code}). Intentando reconectar...`);
