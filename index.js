@@ -8,48 +8,74 @@ const fs   = require('fs');
 const path = require('path');
 require('dotenv').config();
 
+// ─── Servidores autorizados ───────────────────────────────────────────────────
+const ALLOWED_GUILDS = (process.env.ALLOWED_GUILDS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+
 // ─── Validación temprana de TOKEN ─────────────────────────────────────────────
 if (!process.env.TOKEN) {
     console.error('❌ FATAL: La variable de entorno TOKEN no está configurada.');
-    console.error('   Configúrala en el panel de variables de entorno del hosting.');
     process.exit(1);
 }
 
 const BANNER_URL = 'https://i.imgur.com/RHLSmgM.png';
 
-// ─── Emojis personalizados ────────────────────────────────────────────────────
+// ─── Emojis del servidor (externos) ──────────────────────────────────────────
+const EX = {
+    gifr:        '<:Gifr:1514442443209052281>',
+    flecha:      '<:Flecha:1513677979950252193>',
+    warning:     '<:Warning:1513678086204293120>',
+    alert:       '<:Alert:1513678401746239520>',
+    dinero:      '<:Dinero:1513678931402686585>',
+    starr:       '<:starr:1514437831668531310>',
+    nochee:      '<:nochee:1514438882987610165>',
+    bluecrown:   '<:BlueCrownn:1514439987595055234>',
+    carrito:     '<:CarritoCompras:1514442182042452038>',
+    dinero2:     '<:Dinero2:1514442666366992394>',
+    document:    '<:document:1514443447443128391>',
+    discordss:   '<:discordss:1514444199175393370>',
+    boost:       '<:boost:1387616158273896468>',
+    bluestar:    '<:Bluestar:1514445439045210173>',
+};
+
+// ─── Emojis internos del bot ──────────────────────────────────────────────────
 const E = {
-    reloj:    '<:Aurex_Reloj:1513372785727111278>',
-    cerebro:  '<:Aurex_AiCerebro:1513372643728949278>',
-    invoice:  '<:Aurex_Invoicemalhechoxd:1513372495695183872>',
-    export:   '<:Aurex_Export:1513372369849290782>',
-    settings: '<:Aurex_Settings:1513371533161005177>',
-    roles:    '<:Aurex_Roles:1513371413254508675>',
-    orders:   '<:Aurex_Orders:1513363677569486999>',
-    analytics:'<:Aurex_Analytics:1513363579703787621>',
-    review:   '<:Aurex_Review:1513362468133535764>',
-    stats:    '<:Aurex_Stats:1513362232275243112>',
-    stock:    '<:Aurex_Stock:1513361977219612745>',
-    bot:      '<:Aurex_Bot:1513350718248058991>',
-    money:    '<:Aurex_Money:1513350564094804032>',
-    ticket:   '<:Aurex_Ticket:1513350401850871819>',
-    carrito:  '🛒',
-    tarjeta:  '💳',
-    keycard:  '🪪',
-    caja:     '📦',
-    diamante: '💎',
-    corona:   '👑',
-    escudo:   '🛡️',
-    campana:  '🔔',
-    relojArena: '⏳',
-    check:    '✅',
-    cruz:     '❌',
+    reloj:       '<:Aurex_Reloj:1513372785727111278>',
+    cerebro:     '<:Aurex_AiCerebro:1513372643728949278>',
+    invoice:     '<:Aurex_Invoicemalhechoxd:1513372495695183872>',
+    export:      '<:Aurex_Export:1513372369849290782>',
+    settings:    '<:Aurex_Settings:1513371533161005177>',
+    roles:       '<:Aurex_Roles:1513371413254508675>',
+    orders:      '<:Aurex_Orders:1513363677569486999>',
+    analytics:   '<:Aurex_Analytics:1513363579703787621>',
+    review:      '<:Aurex_Review:1513362468133535764>',
+    stats:       '<:Aurex_Stats:1513362232275243112>',
+    bot:         '<:Aurex_Bot:1513350718248058991>',
+    money:       '<:Aurex_Money:1513350564094804032>',
+    ticket:      '<:Aurex_Ticket:1513350401850871819>',
+    tarjeta:     '💳',
+    keycard:     '🪪',
+    caja:        '📦',
+    diamante:    '💎',
+    corona:      '👑',
+    escudo:      '🛡️',
+    campana:     '🔔',
+    relojArena:  '⏳',
+    check:       '✅',
+    cruz:        '❌',
     advertencia: '⚠️',
-    flecha:   '➜',
-    arrow:    '╰➤',
-    arrowR:   '➜',
-    dot:      '◆',
-    line:     '▸',
+    arrow:       '╰➤',
+    arrowR:      '➜',
+    dot:         '◆',
+    line:        '▸',
+    lock:        '🔒',
+    unlock:      '🔓',
+    hand:        '🤝',
+    star:        '⭐',
+    pin:         '📌',
+    scroll:      '📜',
+    person:      '👤',
+    tools:       '🔧',
+    gift:        '🎁',
 };
 
 const TIER_UMBRALES = [
@@ -68,24 +94,18 @@ try {
     process.exit(1);
 }
 
-// FIX #1: escritura atómica con fallback para filesystems que no soportan rename
 function saveAtomic(filePath, data) {
     const tmp = filePath + '.tmp';
     try {
         fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
-        try {
-            fs.renameSync(tmp, filePath);
-        } catch {
-            fs.copyFileSync(tmp, filePath);
-            try { fs.unlinkSync(tmp); } catch { /* no crítico */ }
-        }
+        try { fs.renameSync(tmp, filePath); }
+        catch { fs.copyFileSync(tmp, filePath); try { fs.unlinkSync(tmp); } catch { } }
     } catch (e) {
-        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* ignorar */ }
+        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { }
         throw e;
     }
 }
 
-// ─── Carga/guardado RAW (internos, no usar directamente) ──────────────────────
 function _loadDataRaw(guildId) {
     const file = path.join(DATA_DIR, `${guildId}.json`);
     if (!fs.existsSync(file)) return _defaultData();
@@ -95,13 +115,6 @@ function _loadDataRaw(guildId) {
         return JSON.parse(raw);
     } catch (e) {
         console.error(`❌ loadData [${guildId}]:`, e.message);
-        const tmp = file + '.tmp';
-        if (fs.existsSync(tmp)) {
-            try {
-                const rawTmp = fs.readFileSync(tmp, 'utf8');
-                if (rawTmp && rawTmp.trim()) return JSON.parse(rawTmp);
-            } catch { /* ignorar */ }
-        }
         return _defaultData();
     }
 }
@@ -114,13 +127,6 @@ function _loadTicketsRaw(guildId) {
         return JSON.parse(raw);
     } catch (e) {
         console.error(`❌ loadTickets [${guildId}]:`, e.message);
-        const tmp = file + '.tmp';
-        if (fs.existsSync(tmp)) {
-            try {
-                const rawTmp = fs.readFileSync(tmp, 'utf8');
-                if (rawTmp && rawTmp.trim()) return JSON.parse(rawTmp);
-            } catch { /* ignorar */ }
-        }
         return _defaultTickets();
     }
 }
@@ -135,44 +141,52 @@ function saveTickets(guildId, data) {
 function _defaultData() {
     return {
         ventas: [], resenas: [],
-        config: { logChannelId: null, dmEnabled: true, resenaChannelId: null, dmCierreTexto: null, tierRoles: {}, vipRoleId: null },
-        afk: {}, stock: [],
+        config: {
+            logChannelId: null, dmEnabled: true, resenaChannelId: null,
+            dmCierreTexto: null, tierRoles: {}, vipRoleId: null,
+            vipCommandRoleId: null
+        },
+        afk: {},
         analytics: { totalVentas: 0, totalRobux: 0, porVendedor: {}, porCliente: {} },
-        sorteos: []
+        sorteos: [],
+        vipMembers: {}
     };
 }
 function _defaultTickets() {
     return {
         tickets: [], cooldowns: {},
-        config: { panelMessageId: null, panelChannelId: null, categoryId: null, logChannelId: null, vendedorRoleId: null, staffRoleId: null }
+        config: {
+            panelMessageId: null, panelChannelId: null, categoryId: null,
+            logChannelId: null, vendedorRoleId: null, staffRoleId: null
+        }
     };
 }
 
-// ─── Sanear datos al cargar (migración defensiva) ─────────────────────────────
 function sanitizeData(data) {
-    if (!data.ventas)                          data.ventas   = [];
-    if (!data.resenas)                         data.resenas  = [];
-    if (!data.afk)                             data.afk      = {};
-    if (!data.stock)                           data.stock    = [];
-    if (!data.sorteos)                         data.sorteos  = [];
-    if (!data.config)                          data.config   = {};
+    if (!data.ventas)                              data.ventas   = [];
+    if (!data.resenas)                             data.resenas  = [];
+    if (!data.afk)                                 data.afk      = {};
+    if (!data.sorteos)                             data.sorteos  = [];
+    if (!data.vipMembers)                          data.vipMembers = {};
+    if (!data.config)                              data.config   = {};
     if (data.config.logChannelId    === undefined) data.config.logChannelId    = null;
     if (data.config.dmEnabled       === undefined) data.config.dmEnabled       = true;
     if (data.config.resenaChannelId === undefined) data.config.resenaChannelId = null;
     if (data.config.dmCierreTexto   === undefined) data.config.dmCierreTexto   = null;
-    if (!data.config.tierRoles)                data.config.tierRoles = {};
+    if (!data.config.tierRoles)                    data.config.tierRoles = {};
     if (data.config.vipRoleId       === undefined) data.config.vipRoleId       = null;
-    if (!data.analytics)                       data.analytics = {};
-    if (!data.analytics.totalVentas)           data.analytics.totalVentas = 0;
-    if (!data.analytics.totalRobux)            data.analytics.totalRobux  = 0;
-    if (!data.analytics.porVendedor)           data.analytics.porVendedor = {};
-    if (!data.analytics.porCliente)            data.analytics.porCliente  = {};
+    if (data.config.vipCommandRoleId=== undefined) data.config.vipCommandRoleId= null;
+    if (!data.analytics)                           data.analytics = {};
+    if (!data.analytics.totalVentas)               data.analytics.totalVentas = 0;
+    if (!data.analytics.totalRobux)                data.analytics.totalRobux  = 0;
+    if (!data.analytics.porVendedor)               data.analytics.porVendedor = {};
+    if (!data.analytics.porCliente)                data.analytics.porCliente  = {};
     return data;
 }
 function sanitizeTickets(data) {
-    if (!data.tickets)                         data.tickets   = [];
-    if (!data.cooldowns)                       data.cooldowns = {};
-    if (!data.config)                          data.config    = {};
+    if (!data.tickets)   data.tickets   = [];
+    if (!data.cooldowns) data.cooldowns = {};
+    if (!data.config)    data.config    = {};
     const cfg = data.config;
     if (cfg.panelMessageId  === undefined) cfg.panelMessageId  = null;
     if (cfg.panelChannelId  === undefined) cfg.panelChannelId  = null;
@@ -182,9 +196,6 @@ function sanitizeTickets(data) {
     if (cfg.staffRoleId     === undefined) cfg.staffRoleId     = null;
     return data;
 }
-
-// FIX #1 APLICADO: loadData y loadTickets son directamente las versiones seguras.
-// Todo el código usa estas funciones — nunca las RAW.
 function loadData(guildId)    { return sanitizeData(_loadDataRaw(guildId));       }
 function loadTickets(guildId) { return sanitizeTickets(_loadTicketsRaw(guildId)); }
 
@@ -197,63 +208,44 @@ function isIgnorableError(err) {
     const code = err.code ?? err.status;
     if ([10062, 40060, 10008, 10003, 50013, 50035, 40001, 40002].includes(code)) return true;
     const msg = (err.message ?? '').toLowerCase();
-    if (msg.includes('unknown interaction'))              return true;
-    if (msg.includes('unknown message'))                  return true;
-    if (msg.includes('cannot send messages'))             return true;
-    if (msg.includes('missing access'))                   return true;
+    if (msg.includes('unknown interaction'))       return true;
+    if (msg.includes('unknown message'))           return true;
+    if (msg.includes('cannot send messages'))      return true;
+    if (msg.includes('missing access'))            return true;
     if (msg.includes('interaction has already been acknowledged')) return true;
-    if (msg.includes('the user aborted a request'))       return true;
-    if (msg.includes('econnreset'))                       return true;
-    if (msg.includes('econnrefused'))                     return true;
-    if (msg.includes('etimedout'))                        return true;
-    if (msg.includes('already been acknowledged'))        return true;
-    if (msg.includes('restoreerror'))                     return true;
+    if (msg.includes('the user aborted a request')) return true;
+    if (msg.includes('econnreset'))                return true;
+    if (msg.includes('econnrefused'))              return true;
+    if (msg.includes('etimedout'))                 return true;
+    if (msg.includes('already been acknowledged')) return true;
     return false;
 }
-process.on('unhandledRejection', (err) => {
-    if (isIgnorableError(err)) return;
-    console.error('❌ [unhandledRejection]', err?.message ?? err);
-});
-process.on('uncaughtException', (err) => {
-    if (isIgnorableError(err)) return;
-    console.error('❌ [uncaughtException]', err?.message ?? err);
-});
-process.on('warning', (warning) => {
-    if (warning.name === 'MaxListenersExceededWarning') return;
-    console.warn('⚠️ [NodeWarning]', warning.name, warning.message);
-});
+process.on('unhandledRejection', (err) => { if (!isIgnorableError(err)) console.error('❌ [unhandledRejection]', err?.message ?? err); });
+process.on('uncaughtException',  (err) => { if (!isIgnorableError(err)) console.error('❌ [uncaughtException]',  err?.message ?? err); });
+process.on('warning', (w) => { if (w.name !== 'MaxListenersExceededWarning') console.warn('⚠️', w.name, w.message); });
 
 // ─── Helpers de interacción ───────────────────────────────────────────────────
 async function safeReply(interaction, opts) {
-    const normalized = { ...opts };
-    if (normalized.ephemeral === true) { normalized.flags = 64; delete normalized.ephemeral; }
-    if (!normalized.flags) normalized.flags = 64;
+    const o = { ...opts };
+    if (o.ephemeral === true) { o.flags = 64; delete o.ephemeral; }
+    if (!o.flags) o.flags = 64;
     try {
-        if (interaction.replied)  return await interaction.followUp({ ...normalized });
-        if (interaction.deferred) return await interaction.editReply(normalized);
-        return await interaction.reply({ ...normalized });
-    } catch (e) {
-        if (!isIgnorableError(e)) console.warn('⚠️ [safeReply]', e?.message);
-    }
+        if (interaction.replied)  return await interaction.followUp({ ...o });
+        if (interaction.deferred) return await interaction.editReply(o);
+        return await interaction.reply({ ...o });
+    } catch (e) { if (!isIgnorableError(e)) console.warn('⚠️ [safeReply]', e?.message); }
 }
 async function safeReplyPublic(interaction, opts) {
     try {
         if (interaction.replied)  return await interaction.followUp(opts);
         if (interaction.deferred) return await interaction.editReply(opts);
         return await interaction.reply(opts);
-    } catch (e) {
-        if (!isIgnorableError(e)) console.warn('⚠️ [safeReplyPublic]', e?.message);
-    }
+    } catch (e) { if (!isIgnorableError(e)) console.warn('⚠️ [safeReplyPublic]', e?.message); }
 }
 async function safeDefer(interaction, ephemeral = false) {
     if (interaction.deferred || interaction.replied) return true;
-    try {
-        await interaction.deferReply(ephemeral ? { flags: 64 } : {});
-        return true;
-    } catch (e) {
-        if (!isIgnorableError(e)) console.warn('⚠️ [safeDefer]', e?.message);
-        return false;
-    }
+    try { await interaction.deferReply(ephemeral ? { flags: 64 } : {}); return true; }
+    catch (e) { if (!isIgnorableError(e)) console.warn('⚠️ [safeDefer]', e?.message); return false; }
 }
 async function safeUpdate(interaction, opts) {
     try {
@@ -266,14 +258,7 @@ async function safeHandle(interaction, fn) {
     catch (err) {
         if (isIgnorableError(err)) return;
         console.error(`❌ [safeHandle] ${interaction.commandName ?? interaction.customId ?? '?'}:`, err.message ?? err);
-        const esFaltaPermisos = err.code === 50013
-            || (err.message ?? '').toLowerCase().includes('missing permissions')
-            || (err.message ?? '').toLowerCase().includes('missing access');
-        await safeReply(interaction, {
-            content: esFaltaPermisos
-                ? '⚠️ **Faltan permisos.** El bot necesita: `Gestionar canales` `Gestionar roles` `Ver canales` `Enviar mensajes`.'
-                : '⚠️ Ocurrió un error inesperado. Intenta de nuevo.'
-        });
+        await safeReply(interaction, { content: '⚠️ Ocurrió un error inesperado. Intenta de nuevo.' });
     }
 }
 
@@ -291,26 +276,42 @@ function checkCooldown(guildId, userId, comando, segundos) {
 }
 setInterval(() => {
     const ahora = Date.now();
-    for (const [key, ts] of cooldownMap)
-        if (ahora - ts > 300_000) cooldownMap.delete(key);
+    for (const [k, ts] of cooldownMap) if (ahora - ts > 300_000) cooldownMap.delete(k);
 }, 10 * 60 * 1000);
 
 // ─── Utilidades ───────────────────────────────────────────────────────────────
 const PREFIX = '$';
-function parseRobux(str) {
+
+function parseDuracion(str) {
     if (!str) return null;
-    const s = String(str).toLowerCase().trim();
-    if (s.endsWith('k')) { const n = parseFloat(s) * 1_000; return n > 0 ? Math.round(n) : null; }
-    if (s.endsWith('m')) { const n = parseFloat(s) * 1_000_000; return n > 0 ? Math.round(n) : null; }
-    const n = parseInt(s.replace(/,/g, ''), 10);
-    return isNaN(n) || n <= 0 ? null : n;
+    const s = String(str).trim().toLowerCase();
+    const match = s.match(/^(\d+(?:\.\d+)?)(s|m|h|d)$/);
+    if (!match) return null;
+    const val = parseFloat(match[1]);
+    const unit = match[2];
+    const mul = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+    const ms = val * mul[unit];
+    if (ms < 1000 || ms > 7 * 86_400_000) return null;
+    return ms;
 }
-function formatRobux(n) {
-    if (!n || n === 0) return '0 R$';
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M R$`;
-    if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}k R$`;
-    return `${n} R$`;
+
+function formatDuracion(str) {
+    const s = String(str).trim().toLowerCase();
+    const match = s.match(/^(\d+(?:\.\d+)?)(s|m|h|d)$/);
+    if (!match) return str;
+    const labels = { s: 'segundo', m: 'minuto', h: 'hora', d: 'día' };
+    const plural = parseFloat(match[1]) !== 1;
+    return `${match[1]} ${labels[match[2]]}${plural ? (match[2] === 'd' ? 's' : 's') : ''}`;
 }
+
+function formatDuracionMs(ms) {
+    const s = Math.floor(ms / 1000); const m = Math.floor(s / 60); const h = Math.floor(m / 60); const d = Math.floor(h / 24);
+    if (d > 0) return `${d}d ${h % 24}h`;
+    if (h > 0) return `${h}h ${m % 60}m`;
+    if (m > 0) return `${m}m ${s % 60}s`;
+    return `${s}s`;
+}
+
 function today() {
     return new Date().toLocaleString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
@@ -318,12 +319,11 @@ function ventasPorRango(ventas, rango) {
     const ahora = Date.now();
     const rangos = { hoy: 86_400_000, semana: 604_800_000, mes: 2_592_000_000 };
     const limite = rangos[rango];
-    if (!limite) return ventas; // rango desconocido → devuelve todo
+    if (!limite) return ventas;
     return ventas.filter(v => (ahora - v.timestamp) <= limite);
 }
 function tiempoRelativo(ms) {
-    const min = Math.floor(ms / 60000); const hrs = Math.floor(min / 60); const dias = Math.floor(hrs / 24);
-    if (dias > 0) return `${dias}d ${hrs % 24}h`; if (hrs > 0) return `${hrs}h ${min % 60}m`; return `${min}m`;
+    return formatDuracionMs(ms);
 }
 function estrellas(n) { return '⭐'.repeat(Math.min(Math.max(n, 0), 5)); }
 function calcDuracion(start, end) { return tiempoRelativo(end - start); }
@@ -336,74 +336,52 @@ function esClienteVip(miembro, vipRoleId) {
     if (!vipRoleId || !miembro) return false;
     return miembro.roles.cache.has(vipRoleId);
 }
-
-// FIX #2: usar reduce en vez de Math.max(...array) para evitar stack overflow con arrays grandes
 function nextVentaId(ventas) {
-    return ventas.length
-        ? ventas.reduce((max, v) => v.id > max ? v.id : max, 0) + 1
-        : 1;
+    return ventas.length ? ventas.reduce((max, v) => v.id > max ? v.id : max, 0) + 1 : 1;
 }
 function nextTicketId(tickets) {
-    return tickets.length
-        ? tickets.reduce((max, t) => t.id > max ? t.id : max, 0) + 1
-        : 1;
+    return tickets.length ? tickets.reduce((max, t) => t.id > max ? t.id : max, 0) + 1 : 1;
 }
-
-// FIX #9: helper de timeout para DMs masivos
 function withTimeout(promise, ms) {
-    return Promise.race([
-        promise,
-        new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('timeout')), ms)
-        )
-    ]);
+    return Promise.race([promise, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]);
 }
 
-// ─── Tier: asigna Y degrada roles según compras actuales (FIX #8) ─────────────
+// ─── Tier: asignar/quitar roles automáticamente ───────────────────────────────
 async function actualizarTier(guild, userId, comprasTotal, tierRoles) {
     if (!tierRoles || Object.keys(tierRoles).length === 0) return;
     try {
-        const miembro = guild.members.cache.get(userId)
-            ?? await guild.members.fetch(userId).catch(() => null);
+        const miembro = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
         if (!miembro) return;
-
-        const tierActual = getTier(comprasTotal); // null si < 1 compra
-
+        const tierActual = getTier(comprasTotal);
         for (const t of TIER_UMBRALES) {
-            const roleId    = tierRoles[t.nombre];
+            const roleId = tierRoles[t.nombre];
             if (!roleId) continue;
             const debeTener = tierActual?.nombre === t.nombre;
             const laTiene   = miembro.roles.cache.has(roleId);
-
-            if (debeTener && !laTiene) {
-                await miembro.roles.add(roleId).catch(() => {});
-                console.log(`🎖️ Tier [${t.label}] asignado → ${miembro.user.tag} en ${guild.name}`);
-            } else if (!debeTener && laTiene) {
-                await miembro.roles.remove(roleId).catch(() => {});
-                console.log(`🎖️ Tier [${t.label}] removido → ${miembro.user.tag} en ${guild.name}`);
-            }
+            if (debeTener && !laTiene) await miembro.roles.add(roleId).catch(() => {});
+            else if (!debeTener && laTiene) await miembro.roles.remove(roleId).catch(() => {});
         }
     } catch (err) { console.warn('⚠️ No se pudo actualizar tier:', err?.message); }
 }
 
 async function enviarDM(user, embed, extra = {}) {
     try { await user.send({ embeds: [embed], ...extra }); return true; }
-    catch { console.warn(`⚠️ DM bloqueado: ${user.tag}`); return false; }
+    catch { return false; }
 }
 
 // ─── Embeds de ventas ─────────────────────────────────────────────────────────
 function buildLogEmbed(venta, n) {
     return new EmbedBuilder().setColor('#5865F2')
-        .setTitle(`${E.orders}  Nueva orden registrada`)
+        .setTitle(`${EX.gifr}  Nueva orden registrada`)
         .setDescription(
-            `${E.arrowR} **\`#${n}\`** — ${venta.producto}\n\n` +
-            `${E.arrow} ${E.money} **Cantidad:** \`${formatRobux(venta.robux)}\`\n` +
-            `${E.arrow} 💵 **Precio:**   \`${venta.precio ?? 'No especificado'}\`\n` +
-            `${E.arrow} ${E.tarjeta} **Método:**   \`${venta.metodo}\`\n` +
+            `${EX.flecha} **\`#${n}\`** — ${venta.producto}\n\n` +
+            `${E.arrow} ${EX.dinero} **Monto:** \`${venta.monto ?? 'No especificado'}\`\n` +
+            `${E.arrow} 💵 **Precio:** \`${venta.precio ?? 'No especificado'}\`\n` +
+            `${E.arrow} ${E.tarjeta} **Método:** \`${venta.metodo}\`\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `${E.arrow} 👤 **Cliente:**  <@${venta.clienteId}>\n` +
-            `${E.arrow} 🤝 **Operador:** <@${venta.vendedorId}>`
-        ).setFooter({ text: `Aurex • ${today()}` }).setTimestamp();
+            `${E.arrow} ${E.person} **Cliente:** <@${venta.clienteId}>\n` +
+            `${E.arrow} ${E.hand} **Operador:** <@${venta.vendedorId}>`
+        ).setFooter({ text: `${EX.bluestar} Bot • ${today()}` }).setTimestamp();
 }
 function buildDMVentaEmbed(venta, n, guildName, guildIconURL) {
     return new EmbedBuilder().setColor('#57F287')
@@ -412,37 +390,36 @@ function buildDMVentaEmbed(venta, n, guildName, guildIconURL) {
         .setThumbnail(guildIconURL ?? null)
         .setDescription(
             `¡Hola! Tu pedido fue procesado exitosamente 🎉\n\n` +
-            `${E.arrow} ${E.caja} **Producto** \`${venta.producto}\`\n` +
-            `${E.arrow} ${E.money} **Cantidad** \`${formatRobux(venta.robux)}\`\n` +
-            `${E.arrow} 💵 **Precio** \`${venta.precio ?? 'No especificado'}\`\n` +
-            `${E.arrow} ${E.tarjeta} **Método** \`${venta.metodo}\`\n` +
-            `${E.arrow} ${E.orders} **Orden #** \`${n}\`\n\n` +
+            `${E.arrow} ${E.caja} **Producto:** \`${venta.producto}\`\n` +
+            `${E.arrow} ${EX.dinero} **Monto:** \`${venta.monto ?? 'No especificado'}\`\n` +
+            `${E.arrow} 💵 **Precio:** \`${venta.precio ?? 'No especificado'}\`\n` +
+            `${E.arrow} ${E.tarjeta} **Método:** \`${venta.metodo}\`\n` +
+            `${E.arrow} ${E.orders} **Orden #:** \`${n}\`\n\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `*Guarda tu número de orden para cualquier consulta.*\n` +
-            `*¿Problema con tu pedido? Abre un ticket de soporte.*`
-        ).setFooter({ text: `${guildName} · powered by Aurex` }).setTimestamp();
+            `*Guarda tu número de orden para cualquier consulta.*`
+        ).setFooter({ text: `${guildName} · ${EX.bluestar} Bot` }).setTimestamp();
 }
 function buildVentaPublicaEmbed(venta, n) {
     return new EmbedBuilder().setColor('#5865F2')
         .setTitle(`${E.orders}  Orden \`#${n}\``)
         .setDescription(
-            `${E.arrow} ${E.caja} **Producto** \`${venta.producto}\`\n` +
-            `${E.arrow} ${E.money} **Cantidad** \`${formatRobux(venta.robux)}\`\n` +
-            `${E.arrow} 💵 **Precio** \`${venta.precio ?? 'No especificado'}\`\n` +
-            `${E.arrow} ${E.tarjeta} **Método** \`${venta.metodo}\`\n` +
+            `${E.arrow} ${E.caja} **Producto:** \`${venta.producto}\`\n` +
+            `${E.arrow} ${EX.dinero} **Monto:** \`${venta.monto ?? 'No especificado'}\`\n` +
+            `${E.arrow} 💵 **Precio:** \`${venta.precio ?? 'No especificado'}\`\n` +
+            `${E.arrow} ${E.tarjeta} **Método:** \`${venta.metodo}\`\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `${E.arrow} 👤 **Cliente** <@${venta.clienteId}>\n` +
-            `${E.arrow} 🤝 **Operador** <@${venta.vendedorId}>`
-        ).setFooter({ text: `${E.check} Registrado • ${today()} • Aurex` }).setTimestamp();
+            `${E.arrow} ${E.person} **Cliente:** <@${venta.clienteId}>\n` +
+            `${E.arrow} ${E.hand} **Operador:** <@${venta.vendedorId}>`
+        ).setFooter({ text: `${E.check} Registrado • ${today()}` }).setTimestamp();
 }
 
 // ─── Sistema de Help ──────────────────────────────────────────────────────────
 const HELP_CATEGORIAS = {
     pedidos: {
-        emoji: '💸', label: 'Pedidos',
+        emoji: EX.gifr, label: 'Pedidos',
         embed: () => new EmbedBuilder().setColor('#5865F2').setTitle(`${E.orders}  Pedidos`)
             .setDescription(
-                `${E.arrowR} Comandos para registrar y gestionar ventas.\n\n` +
+                `${EX.flecha} Comandos para registrar y gestionar ventas.\n\n` +
                 `**\`/vender\`**\n${E.arrow} Registra una nueva venta.\n\n` +
                 `**\`/orden [id]\`**\n${E.arrow} Detalle completo de una orden.\n\n` +
                 `**\`/historial\`**\n${E.arrow} Lista los últimos pedidos.\n\n` +
@@ -450,95 +427,83 @@ const HELP_CATEGORIAS = {
                 `**\`/cancelar [orden]\`**\n${E.arrow} Cancela una orden con confirmación.\n\n` +
                 `**\`/exportar\`**\n${E.arrow} Descarga un .txt con pedidos del período.\n\n` +
                 `**\`/factura [orden]\`**\n${E.arrow} Envía comprobante por DM al cliente.`
-            ).setFooter({ text: 'Aurex • /help • Pedidos' }).setTimestamp()
+            ).setFooter({ text: `${EX.bluestar} Bot • /help • Pedidos` }).setTimestamp()
     },
     analiticas: {
-        emoji: '📊', label: 'Analíticas',
+        emoji: EX.starr, label: 'Analíticas',
         embed: () => new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.analytics}  Analíticas`)
             .setDescription(
-                `${E.arrowR} Estadísticas y métricas de tu tienda.\n\n` +
-                `**\`/stats\`**\n${E.arrow} Pedidos y R$ por período.\n\n` +
+                `${EX.flecha} Estadísticas y métricas de tu tienda.\n\n` +
+                `**\`/stats\`**\n${E.arrow} Pedidos por período.\n\n` +
                 `**\`/top\`**\n${E.arrow} Ranking de operadores o clientes.\n\n` +
                 `**\`/dashboard\`**\n${E.arrow} Resumen visual completo.\n\n` +
                 `**\`/servidor-stats\`**\n${E.arrow} Tarjeta completa del servidor.\n\n` +
                 `**\`/perfil [usuario]\`**\n${E.arrow} Estadísticas completas de un usuario.`
-            ).setFooter({ text: 'Aurex • /help • Analíticas' }).setTimestamp()
-    },
-    stock: {
-        emoji: '📦', label: 'Stock',
-        embed: () => new EmbedBuilder().setColor('#57F287').setTitle(`${E.stock}  Stock`)
-            .setDescription(
-                `${E.arrowR} Gestión de inventario.\n\n` +
-                `**\`/stock\`**\n${E.arrow} Muestra ítems disponibles.\n\n` +
-                `**\`/stock-admin [accion]\`**\n${E.arrow} Agrega, edita, elimina o limpia ítems.\n\n` +
-                `**\`/stock-bulk\`**\n${E.arrow} Carga varios ítems desde un modal.\n` +
-                `${E.arrow} Formato: \`Nombre | cantidad | precio | notas\``
-            ).setFooter({ text: 'Aurex • /help • Stock' }).setTimestamp()
+            ).setFooter({ text: `${EX.bluestar} Bot • /help • Analíticas` }).setTimestamp()
     },
     reputacion: {
-        emoji: '⭐', label: 'Reputación',
+        emoji: EX.starr, label: 'Reputación',
         embed: () => new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.review}  Reputación`)
             .setDescription(
-                `${E.arrowR} Sistema de valoraciones.\n\n` +
-                `**\`/reseña [orden]\`**\n${E.arrow} Califica del 1 al 5 una orden que realizaste.\n${E.arrow} Puedes adjuntar una imagen como prueba.\n\n` +
+                `${EX.flecha} Sistema de valoraciones.\n\n` +
+                `**\`/reseña [orden]\`**\n${E.arrow} Califica del 1 al 5 una orden que realizaste.\n\n` +
                 `**\`/resenas [vendedor]\`**\n${E.arrow} Ver promedio y últimas valoraciones.`
-            ).setFooter({ text: 'Aurex • /help • Reputación' }).setTimestamp()
+            ).setFooter({ text: `${EX.bluestar} Bot • /help • Reputación` }).setTimestamp()
     },
     tickets: {
-        emoji: '🎫', label: 'Tickets',
+        emoji: EX.document, label: 'Tickets',
         embed: () => new EmbedBuilder().setColor('#3498DB').setTitle(`${E.ticket}  Tickets`)
             .setDescription(
-                `${E.arrowR} Sistema de atención al cliente.\n\n` +
+                `${EX.flecha} Sistema de atención al cliente.\n\n` +
                 `**\`/ticket-setup\`**\n${E.arrow} Envía el panel de tickets.\n\n` +
-                `**Tipos:** ${E.carrito} Comprar · 🎧 Soporte · ${E.advertencia} Reporte · ℹ️ Otros\n\n` +
+                `**Tipos:** ${EX.carrito} Comprar · 🎧 Soporte · ${EX.warning} Reporte · ℹ️ Otros\n\n` +
                 `${E.arrow} ${E.relojArena} Cooldown de **5 minutos** entre tickets.\n` +
-                `${E.arrow} 📋 Transcript automático al cerrar.\n` +
+                `${E.arrow} ${E.scroll} Transcript automático al cerrar.\n` +
+                `${E.arrow} ${EX.nochee} Staff puede **reclamar** tickets.\n` +
                 `${E.arrow} ${E.campana} Recordatorio al staff si hay >60 min sin respuesta.`
-            ).setFooter({ text: 'Aurex • /help • Tickets' }).setTimestamp()
+            ).setFooter({ text: `${EX.bluestar} Bot • /help • Tickets` }).setTimestamp()
     },
     utilidades: {
-        emoji: '🔧', label: 'Utilidades',
+        emoji: E.tools, label: 'Utilidades',
         embed: () => new EmbedBuilder().setColor('#95A5A6').setTitle(`${E.bot}  Utilidades`)
             .setDescription(
-                `${E.arrowR} Herramientas generales.\n\n` +
-                `**\`/afk [motivo]\`**\n${E.arrow} Activa el modo AFK. Registra menciones y mensajes.\n\n` +
-                `**\`/anuncio\`**\n${E.arrow} Envía un anuncio con embed e imagen opcional.\n\n` +
+                `${EX.flecha} Herramientas generales.\n\n` +
+                `**\`/afk [motivo]\`**\n${E.arrow} Activa el modo AFK.\n\n` +
+                `**\`/anuncio\`**\n${E.arrow} Envía un anuncio embed.\n\n` +
                 `**\`/notificar\`**\n${E.arrow} DM masivo a clientes registrados.\n\n` +
-                `**\`/sorteo\`**\n${E.arrow} Crea un sorteo. VIPs tienen doble entrada.\n` +
-                `${E.arrow} Solo el host puede finalizar o hacer reroll.\n\n` +
+                `**\`/sorteo\`**\n${E.arrow} Crea un sorteo con roles y participaciones.\n\n` +
                 `**\`/clear [cantidad]\`**\n${E.arrow} Borra hasta 100 mensajes.\n\n` +
-                `**\`/ping\`**\n${E.arrow} Latencia actual del bot.\n\n` +
-                `**Prefijo \`$\`:**\n${E.arrow} \`$ping\` · \`$help\` · \`$reroll <id>\``
-            ).setFooter({ text: 'Aurex • /help • Utilidades' }).setTimestamp()
+                `**\`/ping\`**\n${E.arrow} Latencia actual del bot.`
+            ).setFooter({ text: `${EX.bluestar} Bot • /help • Utilidades` }).setTimestamp()
     },
     config: {
-        emoji: '⚙️', label: 'Configuración',
+        emoji: E.settings, label: 'Configuración',
         embed: () => new EmbedBuilder().setColor('#ED4245').setTitle(`${E.settings}  Configuración`)
             .setDescription(
-                `${E.arrowR} Solo administradores.\n\n` +
+                `${EX.flecha} Solo administradores.\n\n` +
                 `**\`/setlog\`** · **\`/setresenas\`** · **\`/configdm\`** · **\`/setdm\`**\n\n` +
                 `**\`/settiers\`**\n${E.arrow} Roles por número de compras.\n\n` +
-                `**\`/setvip [rol]\`**\n${E.arrow} Define el rol VIP para doble entrada en sorteos.`
-            ).setFooter({ text: 'Aurex • /help • Configuración' }).setTimestamp()
+                `**\`/setvip [rol]\`**\n${E.arrow} Rol VIP para sorteos.\n\n` +
+                `**\`/vip-setup\`**\n${E.arrow} Configura el comando /clubvip.`
+            ).setFooter({ text: `${EX.bluestar} Bot • /help • Configuración` }).setTimestamp()
     }
 };
 
 function buildHelpInicio(guild) {
     return new EmbedBuilder().setColor('#5865F2')
-        .setAuthor({ name: 'Aurex Bot', iconURL: client.user?.displayAvatarURL() ?? undefined })
+        .setAuthor({ name: 'Bot', iconURL: client.user?.displayAvatarURL() ?? undefined })
         .setTitle(`${E.bot}  Panel de ayuda`)
         .setDescription(
-            `${E.arrowR} Bienvenido al sistema de ayuda de **Aurex**.\n${E.arrow} Selecciona una categoría con los botones de abajo.\n\n` +
+            `${EX.flecha} Bienvenido al sistema de ayuda.\n${E.arrow} Selecciona una categoría con los botones.\n\n` +
             `${E.orders} **Pedidos** — Registrar y gestionar ventas\n` +
-            `${E.analytics} **Analíticas** — Stats, rankings y dashboard\n` +
-            `${E.stock} **Stock** — Inventario de tu tienda\n` +
+            `${EX.starr} **Analíticas** — Stats, rankings y dashboard\n` +
             `${E.review} **Reputación** — Reseñas y valoraciones\n` +
-            `${E.ticket} **Tickets** — Atención al cliente\n` +
-            `${E.bot} **Utilidades** — Herramientas generales\n` +
+            `${EX.document} **Tickets** — Atención al cliente\n` +
+            `${E.tools} **Utilidades** — Herramientas generales\n` +
             `${E.settings} **Configuración** — Ajustes del servidor`
         )
         .setThumbnail(guild?.iconURL({ dynamic: true }) ?? null)
-        .setFooter({ text: `Aurex • ${guild?.name ?? ''} · Usa los botones para navegar` })
+        .setFooter({ text: `${EX.bluestar} Bot • ${guild?.name ?? ''} · Usa los botones para navegar` })
         .setTimestamp();
 }
 
@@ -547,13 +512,13 @@ function buildHelpRows() {
     const row1 = new ActionRowBuilder().addComponents(
         keys.slice(0, 4).map(k => {
             const cat = HELP_CATEGORIAS[k];
-            return new ButtonBuilder().setCustomId(`help_cat_${k}`).setLabel(cat.label).setEmoji(cat.emoji).setStyle(ButtonStyle.Secondary);
+            return new ButtonBuilder().setCustomId(`help_cat_${k}`).setLabel(cat.label).setStyle(ButtonStyle.Secondary);
         })
     );
     const row2 = new ActionRowBuilder().addComponents(
         ...keys.slice(4).map(k => {
             const cat = HELP_CATEGORIAS[k];
-            return new ButtonBuilder().setCustomId(`help_cat_${k}`).setLabel(cat.label).setEmoji(cat.emoji).setStyle(ButtonStyle.Secondary);
+            return new ButtonBuilder().setCustomId(`help_cat_${k}`).setLabel(cat.label).setStyle(ButtonStyle.Secondary);
         }),
         new ButtonBuilder().setCustomId('help_inicio').setLabel('Inicio').setEmoji('🏠').setStyle(ButtonStyle.Primary)
     );
@@ -565,76 +530,86 @@ const TICKET_COOLDOWN_MS = 5 * 60 * 1000;
 
 const CATEGORIAS = {
     comprar: {
-        emoji: '🛒', label: 'Comprar', descripcion: '¿Estás interesado en adquirir nuestros productos o servicios?',
+        emoji: EX.carrito, label: 'Comprar',
+        descripcion: '¿Estás interesado en adquirir nuestros productos?',
         prefijo: 'compra', color: '#57F287',
         bienvenida: (u) =>
-            `### ${E.carrito}  Ticket de Compra\n` +
-            `${E.arrowR} ¡Hola, **${u}**! Bienvenido a tu ticket de compra.\n` +
+            `### ${EX.carrito}  Ticket de Compra\n` +
+            `${EX.flecha} ¡Hola, **${u}**! Bienvenido a tu ticket de compra.\n` +
             `${E.arrow} Un operador te atenderá en breve.\n\n` +
-            `**📋 Para agilizar tu pedido, cuéntanos:**\n` +
-            `${E.line} ${E.money} ¿Qué cantidad deseas adquirir?\n` +
+            `**${EX.document} Para agilizar tu pedido:**\n` +
+            `${E.line} ${EX.dinero} ¿Qué deseas adquirir?\n` +
             `${E.line} 💵 ¿Cuál es tu presupuesto?\n` +
-            `${E.line} ${E.tarjeta} ¿Cuál es tu método de pago?\n` +
-            `${E.line} 🌎 ¿De qué país eres?`,
+            `${E.line} ${E.tarjeta} ¿Cuál es tu método de pago?`,
         modal: true
     },
     soporte: {
-        emoji: '🎧', label: 'Soporte', descripcion: '¿Tienes alguna duda, problema o inconveniente que necesite atención?',
+        emoji: '🎧', label: 'Soporte',
+        descripcion: '¿Tienes alguna duda, problema o inconveniente?',
         prefijo: 'soporte', color: '#3498DB',
         bienvenida: (u) =>
             `### 🎧  Ticket de Soporte\n` +
-            `${E.arrowR} ¡Hola, **${u}**! Abriste un ticket de soporte.\n` +
+            `${EX.flecha} ¡Hola, **${u}**! Abriste un ticket de soporte.\n` +
             `${E.arrow} Nuestro equipo revisará tu caso lo antes posible.\n\n` +
-            `**📋 Para ayudarte mejor:**\n` +
+            `**${EX.document} Para ayudarte mejor:**\n` +
             `${E.line} ❓ ¿Qué ocurrió exactamente?\n` +
             `${E.line} ${E.orders} ¿Tienes número de orden?\n` +
             `${E.line} 📸 ¿Tienes capturas de pantalla?`,
         modal: false
     },
     reporte: {
-        emoji: '⚠️', label: 'Reporte', descripcion: '¿Necesitas reportar algo o a alguien?',
+        emoji: EX.warning, label: 'Reporte',
+        descripcion: '¿Necesitas reportar algo o a alguien?',
         prefijo: 'reporte', color: '#ED4245',
         bienvenida: (u) =>
-            `### ⚠️  Ticket de Reporte\n` +
-            `${E.arrowR} ¡Hola, **${u}**! Recibimos tu reporte.\n` +
+            `### ${EX.warning}  Ticket de Reporte\n` +
+            `${EX.flecha} ¡Hola, **${u}**! Recibimos tu reporte.\n` +
             `${E.arrow} El staff lo revisará con seriedad.\n\n` +
-            `**📋 Necesitamos:**\n` +
-            `${E.line} 👤 Usuario reportado\n` +
+            `**${EX.document} Necesitamos:**\n` +
+            `${E.line} ${E.person} Usuario reportado\n` +
             `${E.line} 📝 Motivo detallado\n` +
             `${E.line} 📸 Evidencia\n` +
             `${E.line} 📅 ¿Cuándo ocurrió?`,
         modal: false
     },
     otros: {
-        emoji: 'ℹ️', label: 'Otros', descripcion: '¿Tienes alguna otra consulta o mensaje para nosotros?',
+        emoji: 'ℹ️', label: 'Otros',
+        descripcion: '¿Tienes alguna otra consulta para nosotros?',
         prefijo: 'otros', color: '#95A5A6',
         bienvenida: (u) =>
             `### ℹ️  Ticket General\n` +
-            `${E.arrowR} ¡Hola, **${u}**! Abriste un ticket de consulta general.\n` +
+            `${EX.flecha} ¡Hola, **${u}**! Abriste un ticket general.\n` +
             `${E.arrow} Un miembro del staff te atenderá en breve.\n\n` +
-            `**📋 Cuéntanos:**\n` +
+            `**${EX.document} Cuéntanos:**\n` +
             `${E.line} ✏️ ¿En qué podemos ayudarte hoy?`,
         modal: false
     }
 };
 
+// Cuenta tickets por categoria+usuario para numeración
+function contarTicketsPorCategoria(tickets, categoriaKey) {
+    return tickets.filter(t => t.categoria === categoriaKey).length;
+}
+
 function buildPanelEmbed(guildName) {
     return new EmbedBuilder().setColor('#5865F2')
         .setTitle(`${E.ticket}  ¿En qué podemos ayudarte?`)
         .setDescription(
-            `${E.arrowR} Selecciona la opción que mejor se ajuste a tu necesidad.\n\n` +
-            `${E.carrito}  **Comprar**\n${E.arrow} ¿Estás interesado en adquirir nuestros productos o servicios?\n\n` +
-            `🎧  **Soporte**\n${E.arrow} ¿Tienes alguna duda, problema o inconveniente que necesite atención?\n\n` +
-            `⚠️  **Reporte**\n${E.arrow} ¿Necesitas reportar algo o a alguien?\n\n` +
-            `ℹ️  **Otros**\n${E.arrow} ¿Tienes alguna otra consulta o mensaje para nosotros?`
+            `${EX.flecha} Selecciona la opción que mejor se ajuste a tu necesidad.\n\n` +
+            `${EX.carrito}  **Comprar**\n${E.arrow} ¿Estás interesado en adquirir nuestros productos?\n\n` +
+            `🎧  **Soporte**\n${E.arrow} ¿Tienes alguna duda o inconveniente?\n\n` +
+            `${EX.warning}  **Reporte**\n${E.arrow} ¿Necesitas reportar algo o a alguien?\n\n` +
+            `ℹ️  **Otros**\n${E.arrow} ¿Tienes alguna otra consulta?`
         )
-        .setImage(BANNER_URL).setFooter({ text: `${guildName} · powered by Aurex` }).setTimestamp();
+        .setImage(BANNER_URL)
+        .setFooter({ text: `${guildName} · ${EX.bluestar} Bot` })
+        .setTimestamp();
 }
 function buildPanelRow() {
     return new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder().setCustomId('ticket_categoria').setPlaceholder('╰➤  Selecciona una opción...')
+        new StringSelectMenuBuilder().setCustomId('ticket_categoria').setPlaceholder(`${E.arrow}  Selecciona una opción...`)
             .addOptions(Object.entries(CATEGORIAS).map(([key, cat]) =>
-                new StringSelectMenuOptionBuilder().setLabel(cat.label).setDescription(cat.descripcion).setEmoji(cat.emoji).setValue(key)
+                new StringSelectMenuOptionBuilder().setLabel(cat.label).setDescription(cat.descripcion).setEmoji(typeof cat.emoji === 'string' && cat.emoji.startsWith('<') ? { id: cat.emoji.match(/\d+/)?.[0], name: cat.emoji.match(/:(\w+):/)?.[1] ?? 'emoji' } : cat.emoji).setValue(key)
             ))
     );
 }
@@ -651,10 +626,10 @@ async function logTicket(guild, tdata, embedLog, archivo = null) {
 
 async function handleTicketSetup(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-        return safeReply(interaction, { content: '🚫 Solo administradores.' });
+        return safeReply(interaction, { content: `${EX.warning} Solo administradores.` });
     const ok = await safeDefer(interaction, true);
     if (!ok) return;
-    const tdata            = loadTickets(interaction.guild.id);
+    const tdata = loadTickets(interaction.guild.id);
     const canal            = interaction.options.getChannel('canal');
     const categoriaDiscord = interaction.options.getChannel('categoria') ?? null;
     const logCanal         = interaction.options.getChannel('logs')      ?? null;
@@ -676,27 +651,22 @@ async function handleTicketSetup(interaction) {
                     if (canalAnterior.id === canal.id) {
                         await mensajeAnterior.edit({ embeds: [embedPanel], components: [rowPanel] });
                         panelActualizado = true;
-                    } else {
-                        await mensajeAnterior.delete().catch(() => {});
-                    }
+                    } else { await mensajeAnterior.delete().catch(() => {}); }
                 }
             }
         } catch { panelActualizado = false; }
     }
     if (!panelActualizado) {
         const msg = await canal.send({ embeds: [embedPanel], components: [rowPanel] }).catch(() => null);
-        if (msg) {
-            tdata.config.panelMessageId = msg.id;
-            tdata.config.panelChannelId = canal.id;
-        }
+        if (msg) { tdata.config.panelMessageId = msg.id; tdata.config.panelChannelId = canal.id; }
     }
     saveTickets(interaction.guild.id, tdata);
     return interaction.editReply({ content: [
-        `✅ Panel ${panelActualizado ? 'actualizado' : `enviado a <#${canal.id}>`}`,
-        categoriaDiscord ? `📁 Categoría: **${categoriaDiscord.name}**` : '',
-        logCanal         ? `📋 Logs: <#${logCanal.id}>`                 : '',
-        vendedorRol      ? `💼 Rol vendedor: <@&${vendedorRol.id}>`     : '',
-        staffRol         ? `${E.escudo} Rol staff: <@&${staffRol.id}>`  : ''
+        `${E.check} Panel ${panelActualizado ? 'actualizado' : `enviado a <#${canal.id}>`}`,
+        categoriaDiscord ? `${EX.document} Categoría: **${categoriaDiscord.name}**` : '',
+        logCanal ? `${E.scroll} Logs: <#${logCanal.id}>` : '',
+        vendedorRol ? `${EX.nochee} Rol vendedor: <@&${vendedorRol.id}>` : '',
+        staffRol ? `${E.escudo} Rol staff: <@&${staffRol.id}>` : ''
     ].filter(Boolean).join('\n') });
 }
 
@@ -705,8 +675,7 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
     const guild = interaction.guild;
     const user  = interaction.user;
     const cat   = CATEGORIAS[categoriaKey];
-
-    if (!cat) return safeReply(interaction, { content: '⚠️ Categoría de ticket no válida.' });
+    if (!cat) return safeReply(interaction, { content: `${EX.warning} Categoría de ticket no válida.` });
 
     const lockKey = `${guild.id}-${user.id}`;
     if (ticketLocks.has(lockKey))
@@ -716,36 +685,42 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
     try {
         const tdata = loadTickets(guild.id);
 
-        // ¿Ticket ya abierto?
         const ticketAbierto = tdata.tickets.find(t => t.userId === user.id && t.estado === 'abierto');
         if (ticketAbierto) {
             const existe = await guild.channels.fetch(ticketAbierto.channelId).catch(() => null);
-            if (existe) return safeReply(interaction, { content: `⚠️ Ya tienes un ticket abierto: <#${ticketAbierto.channelId}>` });
+            if (existe) return safeReply(interaction, { content: `${EX.warning} Ya tienes un ticket abierto: <#${ticketAbierto.channelId}>` });
             ticketAbierto.estado = 'cerrado';
             ticketAbierto.cerradoPor = 'Sistema (canal eliminado)';
             ticketAbierto.cerradoAt = Date.now();
             saveTickets(guild.id, tdata);
         }
 
-        // Cooldown
         const ultimoTicket = tdata.cooldowns[user.id] ?? 0;
         const restante = TICKET_COOLDOWN_MS - (Date.now() - ultimoTicket);
         if (restante > 0 && ultimoTicket > 0)
             return safeReply(interaction, { content: `${E.relojArena} Espera **${Math.ceil(restante / 60000)} min** antes de abrir otro ticket.` });
 
-        // Permisos del bot
         if (!guild.members.me.permissions.has(PermissionFlagsBits.ManageChannels))
-            return safeReply(interaction, { content: '⚠️ **Faltan permisos.** El bot necesita **Gestionar canales**.' });
+            return safeReply(interaction, { content: `${EX.warning} **Faltan permisos.** El bot necesita **Gestionar canales**.` });
 
-        // Crear canal
-        const nombreCanal = `${cat.prefijo}-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20) || 'usuario'}`;
+        // Numeración por categoría
+        const numCat = contarTicketsPorCategoria(tdata.tickets, categoriaKey) + 1;
+        const userSlug = user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 15) || 'usuario';
+        const nombreCanal = `${cat.prefijo}-${numCat}-${userSlug}`;
+
         const permisos = [
-            { id: guild.id,               deny:  [PermissionFlagsBits.ViewChannel] },
-            { id: user.id,                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-            { id: guild.members.me.id,    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageChannels] }
+            { id: guild.id,            deny:  [PermissionFlagsBits.ViewChannel] },
+            { id: user.id,             allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+            { id: guild.members.me.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageChannels] }
         ];
-        if (tdata.config.staffRoleId)    permisos.push({ id: tdata.config.staffRoleId,    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] });
-        if (categoriaKey === 'comprar' && tdata.config.vendedorRoleId) permisos.push({ id: tdata.config.vendedorRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
+        if (tdata.config.staffRoleId) permisos.push({
+            id: tdata.config.staffRoleId,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages]
+        });
+        if (categoriaKey === 'comprar' && tdata.config.vendedorRoleId) permisos.push({
+            id: tdata.config.vendedorRoleId,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
+        });
 
         const canalTicket = await guild.channels.create({
             name: nombreCanal,
@@ -757,6 +732,7 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
         const ticketId = nextTicketId(tdata.tickets);
         tdata.tickets.push({
             id: ticketId,
+            numero: numCat,
             channelId: canalTicket.id,
             userId: user.id,
             userTag: user.tag,
@@ -765,7 +741,9 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
             timestamp: Date.now(),
             datosModal,
             ultimaActividad: Date.now(),
-            recordatorioEnviado: false
+            recordatorioEnviado: false,
+            reclamadoPor: null,
+            reclamadoTag: null
         });
         tdata.cooldowns[user.id] = Date.now();
         saveTickets(guild.id, tdata);
@@ -773,57 +751,127 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
         let descripcion = cat.bienvenida(user.username);
         if (datosModal) {
             descripcion +=
-                `\n\n**📋 Datos de tu pedido:**\n` +
-                `${E.arrow} ${E.money} **Cantidad:**    \`${datosModal.cantidad}\`\n` +
+                `\n\n**${EX.document} Datos de tu pedido:**\n` +
+                `${E.arrow} ${EX.dinero} **Cantidad:** \`${datosModal.cantidad}\`\n` +
                 `${E.arrow} 💵 **Presupuesto:** \`${datosModal.precio}\`\n` +
-                `${E.arrow} ${E.tarjeta} **Método:**      \`${datosModal.metodo}\``;
+                `${E.arrow} ${E.tarjeta} **Método:** \`${datosModal.metodo}\``;
         }
+
         const embedBienvenida = new EmbedBuilder()
             .setColor(cat.color)
             .setImage(BANNER_URL)
             .setDescription(descripcion)
-            .setFooter({ text: `${E.ticket} Ticket #${ticketId} • ${guild.name} · Aurex` })
+            .setFooter({ text: `${E.ticket} Ticket #${ticketId} (${cat.label} ${numCat}) • ${guild.name}` })
             .setTimestamp();
-        const rowCerrar = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`ticket_cerrar_${ticketId}`).setLabel('🔒 Cerrar ticket').setStyle(ButtonStyle.Danger)
+
+        const rowTicket = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`ticket_reclamar_${ticketId}`).setLabel('✋ Reclamar').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`ticket_cerrar_${ticketId}`).setLabel('🔒 Cerrar').setStyle(ButtonStyle.Danger)
         );
+
         const menciones = [`<@${user.id}>`];
         if (categoriaKey === 'comprar' && tdata.config.vendedorRoleId) menciones.push(`<@&${tdata.config.vendedorRoleId}>`);
         else if (tdata.config.staffRoleId) menciones.push(`<@&${tdata.config.staffRoleId}>`);
 
-        await canalTicket.send({ content: menciones.join(' '), embeds: [embedBienvenida], components: [rowCerrar] }).catch(() => {});
+        await canalTicket.send({ content: menciones.join(' '), embeds: [embedBienvenida], components: [rowTicket] }).catch(() => {});
 
         await logTicket(guild, tdata, new EmbedBuilder().setColor('#57F287')
             .setTitle(`${E.ticket}  Ticket #${ticketId} abierto`)
             .setDescription(
-                `${E.arrow} 👤 **Usuario:**   <@${user.id}> (\`${user.tag}\`)\n` +
-                `${E.arrow} 🗂️ **Categoría:** ${cat.emoji} \`${cat.label}\`\n` +
-                `${E.arrow} 📌 **Canal:**     <#${canalTicket.id}>`
+                `${E.arrow} ${E.person} **Usuario:** <@${user.id}> (\`${user.tag}\`)\n` +
+                `${E.arrow} ${EX.document} **Categoría:** \`${cat.label} ${numCat}\`\n` +
+                `${E.arrow} ${E.pin} **Canal:** <#${canalTicket.id}>`
             ).setTimestamp());
 
         return safeReply(interaction, { content: `${E.check} Tu ticket fue creado: <#${canalTicket.id}>` });
-
-    } finally {
-        ticketLocks.delete(lockKey);
-    }
+    } finally { ticketLocks.delete(lockKey); }
 }
 
+// ─── Reclamar ticket ──────────────────────────────────────────────────────────
+async function reclamarTicket(interaction, ticketId) {
+    const guild  = interaction.guild;
+    const tdata  = loadTickets(guild.id);
+    const ticket = tdata.tickets.find(t => t.id === ticketId);
+
+    if (!ticket || ticket.estado === 'cerrado')
+        return safeReply(interaction, { content: `${EX.warning} Este ticket ya fue cerrado.` });
+
+    const esStaff = tdata.config.staffRoleId ? interaction.member.roles.cache.has(tdata.config.staffRoleId) : false;
+    const esAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
+    if (!esStaff && !esAdmin)
+        return safeReply(interaction, { content: `${E.escudo} Solo el staff puede reclamar tickets.` });
+
+    if (ticket.reclamadoPor && ticket.reclamadoPor !== interaction.user.id) {
+        return safeReply(interaction, {
+            content: `${EX.warning} Este ticket ya fue reclamado por <@${ticket.reclamadoPor}>.`
+        });
+    }
+    if (ticket.reclamadoPor === interaction.user.id) {
+        return safeReply(interaction, { content: `${EX.nochee} Tú ya tienes este ticket reclamado.` });
+    }
+
+    ticket.reclamadoPor  = interaction.user.id;
+    ticket.reclamadoTag  = interaction.user.tag;
+    ticket.reclamadoAt   = Date.now();
+    saveTickets(guild.id, tdata);
+
+    // Quitar visibilidad al resto del staff (excepto quien reclama, cliente y admin)
+    try {
+        const canal = interaction.channel;
+        if (tdata.config.staffRoleId) {
+            await canal.permissionOverwrites.edit(tdata.config.staffRoleId, {
+                ViewChannel: false
+            }).catch(() => {});
+        }
+        // Dar acceso al staff que reclamó individualmente
+        await canal.permissionOverwrites.edit(interaction.user.id, {
+            ViewChannel: true, SendMessages: true, ReadMessageHistory: true
+        }).catch(() => {});
+    } catch { /* no crítico */ }
+
+    const embedReclamado = new EmbedBuilder().setColor('#FEE75C')
+        .setTitle(`${EX.nochee}  Ticket reclamado`)
+        .setDescription(
+            `${E.arrow} ${E.escudo} **Staff:** <@${interaction.user.id}>\n` +
+            `${E.arrow} ${E.person} **Cliente:** <@${ticket.userId}>\n\n` +
+            `${E.line} *El ticket ha sido asignado. Los demás staff no pueden verlo.*`
+        ).setFooter({ text: `${EX.bluestar} Bot • ${today()}` }).setTimestamp();
+
+    const rowReclamado = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`ticket_cerrar_${ticketId}`).setLabel('🔒 Cerrar ticket').setStyle(ButtonStyle.Danger)
+    );
+
+    await interaction.channel.send({ embeds: [embedReclamado], components: [rowReclamado] }).catch(() => {});
+    await safeReply(interaction, { content: `${E.check} Ticket reclamado correctamente.` });
+
+    await logTicket(guild, tdata, new EmbedBuilder().setColor('#FEE75C')
+        .setTitle(`${E.ticket}  Ticket #${ticketId} reclamado`)
+        .setDescription(
+            `${E.arrow} ${E.escudo} **Staff:** <@${interaction.user.id}> (\`${interaction.user.tag}\`)\n` +
+            `${E.arrow} ${E.person} **Cliente:** <@${ticket.userId}>`
+        ).setTimestamp());
+}
+
+// ─── Cerrar ticket ────────────────────────────────────────────────────────────
 async function cerrarTicket(interaction, ticketId) {
     const guild  = interaction.guild;
     const tdata  = loadTickets(guild.id);
     const ticket = tdata.tickets.find(t => t.id === ticketId);
     if (!ticket || ticket.estado === 'cerrado')
-        return safeReply(interaction, { content: '⚠️ Este ticket ya fue cerrado.' });
+        return safeReply(interaction, { content: `${EX.warning} Este ticket ya fue cerrado.` });
+
     const esAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
     const esStaff = tdata.config.staffRoleId ? interaction.member.roles.cache.has(tdata.config.staffRoleId) : false;
-    if (!esAdmin && !esStaff && interaction.user.id !== ticket.userId)
+    const esReclamador = ticket.reclamadoPor === interaction.user.id;
+    if (!esAdmin && !esStaff && !esReclamador && interaction.user.id !== ticket.userId)
         return safeReply(interaction, { content: '🚫 Sin permiso para cerrar este ticket.' });
+
     const ok = await safeDefer(interaction);
     if (!ok) return;
 
-    // FIX #6: Transcript paginado que incluye mensajes de bots
+    // Transcript completo
     let todosLosMensajes = [];
-    let before = undefined;
+    let before;
     while (true) {
         const batch = await interaction.channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
         if (!batch || batch.size === 0) break;
@@ -834,12 +882,19 @@ async function cerrarTicket(interaction, ticketId) {
     todosLosMensajes.reverse();
 
     const closedAt = Date.now();
-    const cat = CATEGORIAS[ticket.categoria] ?? { emoji: '🎫', label: 'Ticket' };
+    const cat      = CATEGORIAS[ticket.categoria] ?? { emoji: '🎫', label: 'Ticket' };
     const duracion = calcDuracion(ticket.timestamp, closedAt);
 
-    let transcript = `TRANSCRIPT — Ticket #${ticket.id} (${cat.label})\nUsuario: ${ticket.userTag}\nCerrado por: ${interaction.user.tag}\nFecha: ${new Date(closedAt).toLocaleString('es-MX')}\nDuración: ${duracion}\n${'─'.repeat(60)}\n\n`;
+    let transcript =
+        `TRANSCRIPT — Ticket #${ticket.id} (${cat.label} ${ticket.numero ?? ''})\n` +
+        `Usuario: ${ticket.userTag}\n` +
+        `Reclamado por: ${ticket.reclamadoTag ?? 'Sin reclamar'}\n` +
+        `Cerrado por: ${interaction.user.tag}\n` +
+        `Fecha apertura: ${new Date(ticket.timestamp).toLocaleString('es-MX')}\n` +
+        `Fecha cierre: ${new Date(closedAt).toLocaleString('es-MX')}\n` +
+        `Duración: ${duracion}\n` +
+        `${'─'.repeat(60)}\n\n`;
 
-    // FIX #6: incluir mensajes de bots con prefijo [BOT]
     todosLosMensajes.forEach(m => {
         const prefix = m.author.bot ? '[BOT] ' : '';
         const linea  = `[${new Date(m.createdTimestamp).toLocaleString('es-MX')}] ${prefix}${m.author.tag}`;
@@ -857,44 +912,47 @@ async function cerrarTicket(interaction, ticketId) {
     ticket.cerradoAt  = closedAt;
     saveTickets(guild.id, tdata);
 
-    await interaction.editReply({ embeds: [new EmbedBuilder().setColor('#ED4245').setTitle('🔒  Ticket cerrado')
+    await interaction.editReply({ embeds: [new EmbedBuilder().setColor('#ED4245')
+        .setTitle(`${E.lock}  Ticket cerrado`)
         .setDescription(
             `${E.arrow} Cerrado por <@${interaction.user.id}>\n` +
             `${E.arrow} El canal se eliminará en **5 segundos**.`
         ).setTimestamp()] }).catch(() => {});
 
-    // DM al usuario con transcript
+    // DM al usuario
     try {
-        const gdata = loadData(guild.id);
-        const dmTexto = gdata.config.dmCierreTexto
-            ?? `¡Hola, **{usuario}**! 👋\n\nEsperamos haberte atendido de la mejor manera en **{servidor}**.\n\n*Si tuviste algún inconveniente, abre un nuevo ticket.*\n\n¡Gracias por confiar en nosotros! 💙`;
-        const buffer = Buffer.from(transcript, 'utf8');
-        const miembro = await guild.members.fetch(ticket.userId).catch(() => null);
+        const gdata    = loadData(guild.id);
+        const dmTexto  = gdata.config.dmCierreTexto ?? `¡Hola, **{usuario}**! 👋\n\nEsperamos haberte atendido de la mejor manera en **{servidor}**.\n\n*Si tuviste algún inconveniente, abre un nuevo ticket.*`;
+        const buffer   = Buffer.from(transcript, 'utf8');
+        const miembro  = await guild.members.fetch(ticket.userId).catch(() => null);
         if (miembro) {
             const embedDM = new EmbedBuilder().setColor('#5865F2')
                 .setAuthor({ name: guild.name, iconURL: guild.iconURL({ dynamic: true }) ?? undefined })
                 .setTitle(`${E.ticket}  Tu ticket fue cerrado`)
                 .setThumbnail(guild.iconURL({ dynamic: true }) ?? null)
                 .setDescription(
-                    `${E.arrow} **Servidor:**    \`${guild.name}\`\n` +
-                    `${E.arrow} **Categoría:**   ${cat.emoji} \`${cat.label}\`\n` +
+                    `${E.arrow} **Servidor:** \`${guild.name}\`\n` +
+                    `${E.arrow} **Categoría:** \`${cat.label} ${ticket.numero ?? ''}\`\n` +
+                    `${E.arrow} **Atendido por:** \`${ticket.reclamadoTag ?? 'Sin asignar'}\`\n` +
                     `${E.arrow} **Cerrado por:** \`${interaction.user.tag}\`\n` +
-                    `${E.arrow} **Duración:**    \`${duracion}\`\n\n` +
+                    `${E.arrow} **Duración:** \`${duracion}\`\n\n` +
                     `━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     dmTexto.replace('{usuario}', ticket.userTag.split('#')[0]).replace('{servidor}', guild.name)
-                ).setFooter({ text: `${guild.name} · powered by Aurex` }).setTimestamp();
+                ).setFooter({ text: `${guild.name} · ${EX.bluestar} Bot` }).setTimestamp();
             await enviarDM(miembro.user, embedDM, { files: [{ attachment: buffer, name: `transcript-ticket${ticketId}.txt` }] });
         }
     } catch (e) { console.warn('⚠️ DM cierre fallido:', e?.message); }
 
     const bufferLog = Buffer.from(transcript, 'utf8');
     await logTicket(guild, tdata,
-        new EmbedBuilder().setColor('#ED4245').setTitle(`${E.ticket}  Ticket #${ticketId} cerrado`)
+        new EmbedBuilder().setColor('#ED4245')
+            .setTitle(`${E.ticket}  Ticket #${ticketId} cerrado`)
             .setDescription(
-                `${E.arrow} 👤 **Usuario:**    <@${ticket.userId}> (\`${ticket.userTag}\`)\n` +
-                `${E.arrow} 🗂️ **Categoría:**  ${cat.emoji} \`${cat.label}\`\n` +
-                `${E.arrow} 🔒 **Cerrado por:** \`${interaction.user.tag}\`\n` +
-                `${E.arrow} ⏱️ **Duración:**   \`${duracion}\``
+                `${E.arrow} ${E.person} **Usuario:** <@${ticket.userId}> (\`${ticket.userTag}\`)\n` +
+                `${E.arrow} ${EX.document} **Categoría:** \`${cat.label} ${ticket.numero ?? ''}\`\n` +
+                `${E.arrow} ${E.escudo} **Reclamado por:** \`${ticket.reclamadoTag ?? 'Sin reclamar'}\`\n` +
+                `${E.arrow} ${E.lock} **Cerrado por:** \`${interaction.user.tag}\`\n` +
+                `${E.arrow} ⏱️ **Duración:** \`${duracion}\``
             ).setTimestamp(),
         { attachment: bufferLog, name: `transcript-ticket${ticketId}.txt` }
     );
@@ -905,21 +963,15 @@ async function handleTicketInteraction(interaction) {
     if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_categoria') {
         const categoriaKey = interaction.values[0];
         const cat = CATEGORIAS[categoriaKey];
-        if (!cat) return safeReply(interaction, { content: '⚠️ Categoría no válida.' });
+        if (!cat) return safeReply(interaction, { content: `${EX.warning} Categoría no válida.` });
         if (cat.modal) {
             const modal = new ModalBuilder()
                 .setCustomId(`ticket_modal_${categoriaKey}`)
                 .setTitle(`Ticket — ${cat.label}`);
             modal.addComponents(
-                new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('cantidad').setLabel('¿Cuánto deseas adquirir?').setPlaceholder('Ej: 1000, 5k').setStyle(TextInputStyle.Short).setRequired(true)
-                ),
-                new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('precio').setLabel('¿Cuál es tu presupuesto?').setPlaceholder('Ej: $5 USD, 130 MXN').setStyle(TextInputStyle.Short).setRequired(true)
-                ),
-                new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('metodo').setLabel('¿Método de pago?').setPlaceholder('Ej: PayPal, Binance, Mercado Pago').setStyle(TextInputStyle.Short).setRequired(true)
-                )
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('cantidad').setLabel('¿Qué deseas adquirir?').setPlaceholder('Ej: Plan Premium, acceso vip').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('precio').setLabel('¿Cuál es tu presupuesto?').setPlaceholder('Ej: $5 USD, 130 MXN').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('metodo').setLabel('¿Método de pago?').setPlaceholder('Ej: PayPal, Binance, Mercado Pago').setStyle(TextInputStyle.Short).setRequired(true))
             );
             await interaction.showModal(modal).catch(e => { if (!isIgnorableError(e)) console.warn('⚠️ showModal:', e?.message); });
             return;
@@ -937,82 +989,54 @@ async function handleTicketInteraction(interaction) {
             metodo:   interaction.fields.getTextInputValue('metodo')
         });
     }
+    if (interaction.isButton() && interaction.customId.startsWith('ticket_reclamar_'))
+        return reclamarTicket(interaction, parseInt(interaction.customId.replace('ticket_reclamar_', '')));
     if (interaction.isButton() && interaction.customId.startsWith('ticket_cerrar_'))
         return cerrarTicket(interaction, parseInt(interaction.customId.replace('ticket_cerrar_', '')));
 }
 
-// ─── Stock bulk ───────────────────────────────────────────────────────────────
-async function handleStockBulkModal(interaction) {
-    const ok = await safeDefer(interaction, true);
-    if (!ok) return;
-    const texto = interaction.fields.getTextInputValue('items_texto');
-    const modo  = (interaction.fields.getTextInputValue('modo_valor') || '').trim().toLowerCase();
-    const modoFinal = (modo === 'r' || modo === 'reemplazar') ? 'reemplazar' : 'agregar';
-    const data = loadData(interaction.guild.id);
-    if (!data.stock) data.stock = [];
-    const lineas = texto.split('\n').map(l => l.trim()).filter(Boolean);
-    if (lineas.length === 0) return safeReply(interaction, { content: '⚠️ No se detectó ningún ítem.' });
-    if (lineas.length > 50)  return safeReply(interaction, { content: '⚠️ Máximo 50 ítems por vez.' });
-    if (modoFinal === 'reemplazar') data.stock = [];
-    const agregados = []; const errores = [];
-    for (const linea of lineas) {
-        const partes = linea.split('|').map(p => p.trim());
-        const nombre = partes[0];
-        if (!nombre) { errores.push(`Sin nombre: \`${linea.slice(0, 30)}\``); continue; }
-        const cantidad = partes[1] ? parseInt(partes[1]) : 0;
-        const precio = partes[2] || null; const notas = partes[3] || null;
-        const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre.toLowerCase());
-        if (idx !== -1) {
-            data.stock[idx] = { nombre, cantidad: isNaN(cantidad) ? data.stock[idx].cantidad : cantidad, precio: precio ?? data.stock[idx].precio, notas: notas ?? data.stock[idx].notas };
-        } else {
-            data.stock.push({ nombre, cantidad: isNaN(cantidad) ? 0 : cantidad, precio, notas });
-        }
-        agregados.push(nombre);
-    }
-    saveData(interaction.guild.id, data);
-    return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#57F287')
-        .setTitle(`${E.stock}  Stock ${modoFinal === 'reemplazar' ? 'reemplazado' : 'actualizado'}`)
-        .setDescription(
-            `${E.arrow} ${E.check} **${agregados.length}** ítem(s) cargados\n` +
-            `${modoFinal === 'reemplazar' ? `${E.arrow} 🔄 Stock anterior eliminado\n` : ''}` +
-            `${errores.length > 0 ? `${E.arrow} ${E.advertencia} **${errores.length}** error(es)\n` : ''}\n` +
-            `**Procesados:**\n${agregados.map(n => `${E.line} \`${n}\``).join('\n')}` +
-            `${errores.length > 0 ? `\n\n**Errores:**\n${errores.map(e => `${E.line} ${e}`).join('\n')}` : ''}`
-        ).setFooter({ text: `Stock total: ${data.stock.length} ítem(s)` }).setTimestamp()] });
-}
-
 // ─── Sorteos ──────────────────────────────────────────────────────────────────
-function sorteoEntradas(data, userId, miembro, vipRoleId) {
-    const compras = data.analytics?.porCliente?.[userId]?.compras ?? 0;
-    let base = Math.min(1 + Math.floor(compras / 5), 10);
-    if (esClienteVip(miembro, vipRoleId)) base = Math.min(base * 2, 20);
-    return base;
-}
-
 function buildSorteoEmbed(sorteo, guildName) {
-    const ahora = Date.now();
+    const ahora     = Date.now();
     const terminado = ahora >= sorteo.fin;
-    const tiempoRestante = terminado ? 'Finalizado' : tiempoRelativo(sorteo.fin - ahora);
-    const participantes = sorteo.participantes?.length ?? 0;
-    const entradas = sorteo.participantes?.reduce((s, p) => s + p.entradas, 0) ?? 0;
+    const tiempoRestante = terminado ? 'Finalizado' : formatDuracionMs(sorteo.fin - ahora);
+    const participantes  = sorteo.participantes?.length ?? 0;
+    const totalEntradas  = sorteo.participantes?.reduce((s, p) => s + (p.entradas ?? 1), 0) ?? 0;
+
+    // Descripción de participantes (máx 10 visible)
+    let listaParticipantes = '';
+    if (sorteo.participantes?.length > 0) {
+        const visibles = sorteo.participantes.slice(0, 10);
+        listaParticipantes = '\n\n**🎟️ Participantes:**\n' +
+            visibles.map(p => `${E.line} <@${p.userId}> — \`${p.entradas}\` entrada(s)`).join('\n') +
+            (sorteo.participantes.length > 10 ? `\n${E.line} *...y ${sorteo.participantes.length - 10} más.*` : '');
+    }
+
+    // Roles con participaciones
+    let rolesDesc = '';
+    if (sorteo.roles?.length > 0) {
+        rolesDesc = '\n\n**🎖️ Bonus por rol:**\n' +
+            sorteo.roles.map(r => `${E.line} <@&${r.roleId}> — \`${r.entradas}\` participación(es)`).join('\n');
+    }
+
     return new EmbedBuilder()
         .setColor(terminado ? '#ED4245' : '#FEE75C')
-        .setTitle(`🎉  Sorteo — ${sorteo.premio}`)
+        .setTitle(`${EX.gifr}  Sorteo — ${sorteo.premio}`)
         .setDescription(
-            `${E.arrow} 🎁 **Premio:**       \`${sorteo.premio}\`\n` +
-            `${E.arrow} ${E.reloj} **Tiempo:**       \`${tiempoRestante}\`\n` +
-            `${E.arrow} 👥 **Participantes:** \`${participantes}\`\n` +
-            `${E.arrow} 🎟️ **Entradas tot.:** \`${entradas}\`\n` +
-            `${E.arrow} 🏆 **Ganadores:**    \`${sorteo.cantGanadores}\`\n\n` +
-            `${E.line} *Más compras = más entradas (máx. 10).*\n` +
-            `${E.line} *${E.diamante} Clientes VIP tienen el doble de entradas (máx. 20).*\n` +
-            `${E.line} *Host: <@${sorteo.hostId}>*\n\n` +
+            `${E.arrow} ${EX.dinero} **Premio:** \`${sorteo.premio}\`\n` +
+            `${E.arrow} ${E.reloj} **Tiempo restante:** \`${tiempoRestante}\`\n` +
+            `${E.arrow} ${E.person} **Participantes:** \`${participantes}\`\n` +
+            `${E.arrow} 🎟️ **Entradas totales:** \`${totalEntradas}\`\n` +
+            `${E.arrow} ${EX.bluecrown} **Ganadores:** \`${sorteo.cantGanadores}\`\n` +
+            `${E.arrow} ${EX.nochee} **Host:** <@${sorteo.hostId}>`+
+            rolesDesc +
+            listaParticipantes +
             (terminado && sorteo.ganadores?.length
-                ? `**🏆 Ganador${sorteo.ganadores.length > 1 ? 'es' : ''}:**\n${sorteo.ganadores.map(id => `${E.arrow} <@${id}>`).join('\n')}`
-                : terminado ? `${E.arrow} *Sin participantes para elegir ganador.*` : '')
+                ? `\n\n**${EX.bluecrown} Ganador${sorteo.ganadores.length > 1 ? 'es' : ''}:**\n${sorteo.ganadores.map(id => `${E.arrow} <@${id}>`).join('\n')}`
+                : terminado ? `\n\n${E.arrow} *Sin participantes.*` : '')
         )
         .setImage(sorteo.imagen ?? BANNER_URL)
-        .setFooter({ text: `${guildName} · Aurex · ID: ${sorteo.id}` })
+        .setFooter({ text: `${guildName} · ${EX.bluestar} Bot · ID: ${sorteo.id}` })
         .setTimestamp();
 }
 
@@ -1023,9 +1047,21 @@ function buildSorteoRow(sorteoId, disabled = false) {
     );
 }
 
+function calcularEntradas(sorteo, userId, miembro) {
+    // Buscar si tiene algún rol especial del sorteo
+    if (sorteo.roles?.length > 0 && miembro) {
+        for (const rolConf of sorteo.roles) {
+            if (miembro.roles.cache.has(rolConf.roleId)) {
+                return rolConf.entradas;
+            }
+        }
+    }
+    return 1; // entrada base
+}
+
 function elegirGanadores(participantes, cantidad) {
     const pool = [];
-    for (const p of participantes) { for (let i = 0; i < p.entradas; i++) pool.push(p.userId); }
+    for (const p of participantes) { for (let i = 0; i < (p.entradas ?? 1); i++) pool.push(p.userId); }
     if (pool.length === 0) return [];
     const unicosEnPool = new Set(pool).size;
     const ganadores = new Set();
@@ -1037,85 +1073,81 @@ function elegirGanadores(participantes, cantidad) {
 }
 
 async function handleSorteoParticipar(interaction, sorteoId) {
-    const data = loadData(interaction.guild.id);
+    const data   = loadData(interaction.guild.id);
     const sorteo = data.sorteos.find(s => s.id === sorteoId);
-    if (!sorteo) return safeReply(interaction, { content: '⚠️ Este sorteo ya no existe.' });
-    if (Date.now() >= sorteo.fin || sorteo.estado !== 'activo') return safeReply(interaction, { content: '⏰ Este sorteo ya terminó.' });
+    if (!sorteo) return safeReply(interaction, { content: `${EX.warning} Este sorteo ya no existe.` });
+    if (Date.now() >= sorteo.fin || sorteo.estado !== 'activo')
+        return safeReply(interaction, { content: `${E.relojArena} Este sorteo ya terminó.` });
+
     const yaParticipa = sorteo.participantes?.find(p => p.userId === interaction.user.id);
     if (yaParticipa) return safeReply(interaction, { content: `${E.check} Ya participas con **${yaParticipa.entradas}** entrada(s). ¡Buena suerte!` });
-    const entradas = sorteoEntradas(data, interaction.user.id, interaction.member, data.config?.vipRoleId ?? null);
-    const esVip = esClienteVip(interaction.member, data.config?.vipRoleId ?? null);
+
+    const entradas = calcularEntradas(sorteo, interaction.user.id, interaction.member);
     if (!sorteo.participantes) sorteo.participantes = [];
-    sorteo.participantes.push({ userId: interaction.user.id, userTag: interaction.user.tag, entradas });
+    sorteo.participantes.push({ userId: interaction.user.id, userTag: interaction.user.username, entradas });
     saveData(interaction.guild.id, data);
+
     try {
         await interaction.message.edit({ embeds: [buildSorteoEmbed(sorteo, interaction.guild.name)], components: [buildSorteoRow(sorteoId)] }).catch(() => {});
-    } catch { /* no crítico */ }
+    } catch { }
+
     return safeReply(interaction, {
-        content: `🎟️ ¡Participas con **${entradas}** entrada(s)!${esVip ? `\n> ${E.diamante} **Bonus VIP:** Doble entradas aplicadas.` : `\n${E.line} *Más compras = más entradas (máx. 10)*`}`
+        content: `🎟️ ¡Participas con **${entradas}** entrada(s)!${entradas > 1 ? `\n${E.line} *Bonus de rol aplicado.*` : ''}`
     });
 }
 
 async function handleSorteoFinalizar(interaction, sorteoId) {
-    const data = loadData(interaction.guild.id);
+    const data   = loadData(interaction.guild.id);
     const sorteo = data.sorteos.find(s => s.id === sorteoId);
-    if (!sorteo) return safeReply(interaction, { content: '⚠️ Sorteo no encontrado.' });
-    if (sorteo.estado === 'finalizado') return safeReply(interaction, { content: '⚠️ Este sorteo ya fue finalizado.' });
+    if (!sorteo) return safeReply(interaction, { content: `${EX.warning} Sorteo no encontrado.` });
+    if (sorteo.estado === 'finalizado') return safeReply(interaction, { content: `${EX.warning} Este sorteo ya fue finalizado.` });
 
     const esAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
     if (interaction.user.id !== sorteo.hostId && !esAdmin)
         return safeReply(interaction, { content: `🚫 Solo el host (<@${sorteo.hostId}>) o un administrador puede finalizar este sorteo.` });
 
-    sorteo.estado = 'finalizado'; sorteo.fin = Date.now();
+    sorteo.estado   = 'finalizado'; sorteo.fin = Date.now();
     sorteo.ganadores = elegirGanadores(sorteo.participantes ?? [], sorteo.cantGanadores);
     saveData(interaction.guild.id, data);
 
     await safeUpdate(interaction, { embeds: [buildSorteoEmbed(sorteo, interaction.guild.name)], components: [buildSorteoRow(sorteoId, true)] });
 
     if (sorteo.ganadores.length > 0) {
-        await interaction.channel.send({ content: `🎉 **¡Felicitaciones!** ${sorteo.ganadores.map(id => `<@${id}>`).join(', ')}\n${E.arrow} ¡Ganaste el sorteo de **${sorteo.premio}**! 🎁\n${E.line} *Si no reclamas en 24h, el host puede hacer \`$reroll ${sorteo.id}\`*` }).catch(() => {});
+        await interaction.channel.send({
+            content: `🎉 **¡Felicitaciones!** ${sorteo.ganadores.map(id => `<@${id}>`).join(', ')}\n${E.arrow} ¡Ganaste el sorteo de **${sorteo.premio}**! 🎁\n${E.line} *Si no reclamas en 24h, el host puede hacer \`$reroll ${sorteo.id}\`*`
+        }).catch(() => {});
     } else {
-        await interaction.channel.send({ content: '😔 El sorteo terminó sin participantes suficientes.' }).catch(() => {});
+        await interaction.channel.send({ content: `😔 El sorteo terminó sin participantes suficientes.` }).catch(() => {});
     }
 }
 
 async function verificarSorteos() {
     for (const guild of client.guilds.cache.values()) {
+        if (ALLOWED_GUILDS.length > 0 && !ALLOWED_GUILDS.includes(guild.id)) continue;
         try {
-            const data = loadData(guild.id);
+            const data  = loadData(guild.id);
             if (!data.sorteos?.length) continue;
             const ahora = Date.now();
-            let cambio = false;
-
+            let cambio  = false;
             for (const sorteo of data.sorteos) {
                 if (sorteo.estado !== 'activo' || sorteo.fin > ahora) continue;
-
                 sorteo.estado    = 'finalizado';
                 sorteo.ganadores = elegirGanadores(sorteo.participantes ?? [], sorteo.cantGanadores);
                 cambio = true;
-
                 try {
-                    const canal = guild.channels.cache.get(sorteo.canalId)
-                        ?? await guild.channels.fetch(sorteo.canalId).catch(() => null);
+                    const canal = guild.channels.cache.get(sorteo.canalId) ?? await guild.channels.fetch(sorteo.canalId).catch(() => null);
                     if (canal) {
                         if (sorteo.messageId) {
                             const msg = await canal.messages.fetch(sorteo.messageId).catch(() => null);
                             if (msg) await msg.edit({ embeds: [buildSorteoEmbed(sorteo, guild.name)], components: [buildSorteoRow(sorteo.id, true)] }).catch(() => {});
                         }
                         if (sorteo.ganadores.length > 0) {
-                            await canal.send({ content: `🎉 **¡El sorteo terminó!** ${sorteo.ganadores.map(id => `<@${id}>`).join(', ')}\n${E.arrow} ¡Ganaste **${sorteo.premio}**! 🎁\n${E.line} *Si no reclamas en 24h, el host puede hacer \`$reroll ${sorteo.id}\`*` }).catch(() => {});
-                        } else {
-                            await canal.send({ content: '😔 El sorteo terminó sin participantes.' }).catch(() => {});
-                        }
+                            await canal.send({ content: `🎉 **¡El sorteo terminó!** ${sorteo.ganadores.map(id => `<@${id}>`).join(', ')}\n${E.arrow} ¡Ganaste **${sorteo.premio}**! 🎁` }).catch(() => {});
+                        } else { await canal.send({ content: '😔 El sorteo terminó sin participantes.' }).catch(() => {}); }
                     }
-                } catch (e) { console.warn(`⚠️ verificarSorteos canal [${guild.name}]:`, e?.message); }
+                } catch (e) { console.warn(`⚠️ verificarSorteos [${guild.name}]:`, e?.message); }
             }
-
-            // Limpiar sorteos viejos (>7 días)
-            const antes = data.sorteos.length;
             data.sorteos = data.sorteos.filter(s => Date.now() - (s.timestamp ?? 0) < 7 * 24 * 60 * 60 * 1000);
-            if (data.sorteos.length !== antes) cambio = true;
-
             if (cambio) saveData(guild.id, data);
         } catch (e) { console.warn(`⚠️ verificarSorteos [${guild.name}]:`, e?.message); }
     }
@@ -1126,21 +1158,31 @@ async function handleSorteo(interaction) {
         return safeReply(interaction, { content: '🚫 Solo administradores.' });
 
     const premio        = interaction.options.getString('premio');
-    const duracionMin   = interaction.options.getInteger('duracion') ?? 60;
+    const durStr        = interaction.options.getString('duracion') ?? '1h';
     const cantGanadores = interaction.options.getInteger('ganadores') ?? 1;
     const imagenUrl     = interaction.options.getString('imagen') ?? null;
 
-    // FIX #4: validar duración
-    if (duracionMin < 1 || duracionMin > 10080)
-        return safeReply(interaction, { content: '⚠️ La duración debe estar entre **1 minuto** y **7 días** (10080 min).' });
+    const durMs = parseDuracion(durStr);
+    if (!durMs)
+        return safeReply(interaction, { content: `${EX.warning} Duración inválida. Usa formatos como: \`30s\` \`10m\` \`2h\` \`1d\` (max 7d).` });
 
-    if (imagenUrl) { try { new URL(imagenUrl); } catch { return safeReply(interaction, { content: '⚠️ URL de imagen no válida.' }); } }
+    if (imagenUrl) { try { new URL(imagenUrl); } catch { return safeReply(interaction, { content: `${EX.warning} URL de imagen no válida.` }); } }
 
-    const data = loadData(interaction.guild.id);
+    // Roles opcionales con participaciones
+    const roles = [];
+    for (let i = 1; i <= 4; i++) {
+        const rol     = interaction.options.getRole(`rol_${i}`)      ?? null;
+        const entradas = interaction.options.getInteger(`entradas_${i}`) ?? null;
+        if (rol && entradas != null && entradas > 0) {
+            roles.push({ roleId: rol.id, roleName: rol.name, entradas });
+        }
+    }
+
+    const data     = loadData(interaction.guild.id);
     const sorteoId = `${interaction.guild.id}_${Date.now()}`;
-    const fin = Date.now() + duracionMin * 60 * 1000;
-    const sorteo = {
-        id: sorteoId, premio, fin, cantGanadores,
+    const fin      = Date.now() + durMs;
+    const sorteo   = {
+        id: sorteoId, premio, fin, cantGanadores, roles,
         estado: 'activo', participantes: [], ganadores: [],
         canalId: interaction.channelId,
         hostId: interaction.user.id,
@@ -1162,72 +1204,67 @@ async function handleSorteo(interaction) {
 }
 
 async function handleReroll(message, sorteoId) {
-    const data = loadData(message.guild.id);
+    const data   = loadData(message.guild.id);
     const sorteo = data.sorteos?.find(s => s.id === sorteoId);
-    if (!sorteo) return message.reply('⚠️ No se encontró ese sorteo. Verifica el ID.').catch(() => {});
-    if (sorteo.estado !== 'finalizado') return message.reply('⚠️ El sorteo aún no ha finalizado.').catch(() => {});
+    if (!sorteo) return message.reply(`${EX.warning} No se encontró ese sorteo.`).catch(() => {});
+    if (sorteo.estado !== 'finalizado') return message.reply(`${EX.warning} El sorteo aún no ha finalizado.`).catch(() => {});
 
     const esAdmin = message.member?.permissions.has(PermissionFlagsBits.Administrator);
     if (message.author.id !== sorteo.hostId && !esAdmin)
-        return message.reply(`🚫 Solo el host (<@${sorteo.hostId}>) o un administrador puede hacer reroll.`).catch(() => {});
+        return message.reply(`🚫 Solo el host puede hacer reroll.`).catch(() => {});
 
-    if (!sorteo.participantes?.length)
-        return message.reply('😔 No hay participantes para hacer reroll.').catch(() => {});
+    if (!sorteo.participantes?.length) return message.reply(`😔 No hay participantes.`).catch(() => {});
 
-    const nuevosGanadores = elegirGanadores(sorteo.participantes, sorteo.cantGanadores);
-    sorteo.ganadores = nuevosGanadores;
+    sorteo.ganadores = elegirGanadores(sorteo.participantes, sorteo.cantGanadores);
     saveData(message.guild.id, data);
 
     const embedReroll = new EmbedBuilder().setColor('#FEE75C')
-        .setTitle(`🔄  Reroll — ${sorteo.premio}`)
+        .setTitle(`${EX.gifr}  Reroll — ${sorteo.premio}`)
         .setDescription(
-            `${E.arrow} 🎁 **Premio:** \`${sorteo.premio}\`\n` +
-            `${E.arrow} ${E.check} **Nuevo${nuevosGanadores.length > 1 ? 's ganadores' : ' ganador'}:**\n` +
-            nuevosGanadores.map(id => `${E.line} <@${id}>`).join('\n') +
-            `\n\n${E.line} *Reroll realizado por <@${message.author.id}>*`
-        )
-        .setFooter({ text: `Aurex · ID: ${sorteoId}` })
-        .setTimestamp();
+            `${E.arrow} ${EX.dinero} **Premio:** \`${sorteo.premio}\`\n` +
+            `${E.arrow} ${EX.bluecrown} **Nuevo${sorteo.ganadores.length > 1 ? 's ganadores' : ' ganador'}:**\n` +
+            sorteo.ganadores.map(id => `${E.line} <@${id}>`).join('\n') +
+            `\n\n${E.line} *Reroll por <@${message.author.id}>*`
+        ).setFooter({ text: `${EX.bluestar} Bot · ID: ${sorteoId}` }).setTimestamp();
 
     await message.channel.send({
-        content: nuevosGanadores.length > 0
-            ? `🔄 **¡Nuevo ganador!** ${nuevosGanadores.map(id => `<@${id}>`).join(', ')}\n${E.arrow} ¡Ganaste el sorteo de **${sorteo.premio}**! 🎁`
+        content: sorteo.ganadores.length > 0
+            ? `🔄 **¡Nuevo ganador!** ${sorteo.ganadores.map(id => `<@${id}>`).join(', ')}\n${E.arrow} ¡Ganaste el sorteo de **${sorteo.premio}**! 🎁`
             : '😔 No se pudo elegir un nuevo ganador.',
         embeds: [embedReroll]
     }).catch(() => {});
 }
 
+// ─── Notificar ────────────────────────────────────────────────────────────────
 async function handleNotificar(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
         return safeReply(interaction, { content: '🚫 Solo administradores.' });
     const mensaje     = interaction.options.getString('mensaje');
-    const titulo      = interaction.options.getString('titulo') ?? '📢  Mensaje de la tienda';
+    const titulo      = interaction.options.getString('titulo') ?? `${EX.gifr}  Mensaje del servidor`;
     const soloActivos = interaction.options.getBoolean('solo_activos') ?? false;
     const imagenUrl   = interaction.options.getString('imagen') ?? null;
-    const ok = await safeDefer(interaction, true);
+    const ok          = await safeDefer(interaction, true);
     if (!ok) return;
-    const data = loadData(interaction.guild.id);
-    let clienteIds = Object.keys(data.analytics?.porCliente ?? {});
+    const data        = loadData(interaction.guild.id);
+    let clienteIds    = Object.keys(data.analytics?.porCliente ?? {});
     if (soloActivos) {
         const hace30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
-        const clientesActivos = new Set(data.ventas.filter(v => v.estado !== 'cancelada' && v.timestamp >= hace30).map(v => v.clienteId));
-        clienteIds = clienteIds.filter(id => clientesActivos.has(id));
+        const activos = new Set(data.ventas.filter(v => v.estado !== 'cancelada' && v.timestamp >= hace30).map(v => v.clienteId));
+        clienteIds = clienteIds.filter(id => activos.has(id));
     }
-    if (clienteIds.length === 0) return interaction.editReply({ content: '📭 No hay clientes registrados para notificar.' });
+    if (clienteIds.length === 0) return interaction.editReply({ content: '📭 No hay clientes registrados.' });
     const embedNotif = new EmbedBuilder().setColor('#5865F2')
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
         .setTitle(titulo).setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
-        .setDescription(`${mensaje}\n\n━━━━━━━━━━━━━━━━━━━━━━━━\n*Este es un mensaje oficial de **${interaction.guild.name}**.*`)
-        .setFooter({ text: `${interaction.guild.name} · powered by Aurex` }).setTimestamp();
+        .setDescription(`${mensaje}\n\n━━━━━━━━━━━━━━━━━━━━━━━━\n*Mensaje oficial de **${interaction.guild.name}**.*`)
+        .setFooter({ text: `${interaction.guild.name} · ${EX.bluestar} Bot` }).setTimestamp();
     if (imagenUrl) { try { new URL(imagenUrl); embedNotif.setImage(imagenUrl); } catch {} }
 
-    // FIX #9: Rate limit seguro con timeout de 5s por DM
     let enviados = 0, fallidos = 0;
     for (let i = 0; i < clienteIds.length; i += 2) {
         await Promise.all(clienteIds.slice(i, i + 2).map(async (id) => {
             try {
-                const miembro = interaction.guild.members.cache.get(id)
-                    ?? await interaction.guild.members.fetch(id).catch(() => null);
+                const miembro = interaction.guild.members.cache.get(id) ?? await interaction.guild.members.fetch(id).catch(() => null);
                 if (!miembro) { fallidos++; return; }
                 const enviado = await withTimeout(enviarDM(miembro.user, embedNotif), 5000).catch(() => false);
                 enviado ? enviados++ : fallidos++;
@@ -1235,65 +1272,65 @@ async function handleNotificar(interaction) {
         }));
         if (i + 2 < clienteIds.length) await new Promise(r => setTimeout(r, 2000));
     }
-    return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#57F287').setTitle(`${E.bot}  Notificación enviada`)
+    return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#57F287')
+        .setTitle(`${E.bot}  Notificación enviada`)
         .setDescription(
-            `${E.arrow} ${E.check} **Enviados:**  \`${enviados}\`\n` +
-            `${E.arrow} ${E.cruz} **Fallidos:**  \`${fallidos}\`\n` +
-            `${E.arrow} 👥 **Total:**     \`${clienteIds.length}\`\n\n` +
-            `${E.line} *Filtro activos: \`${soloActivos ? 'Sí (últimos 30 días)' : 'No'}\`*`
+            `${E.arrow} ${E.check} **Enviados:** \`${enviados}\`\n` +
+            `${E.arrow} ${E.cruz} **Fallidos:** \`${fallidos}\`\n` +
+            `${E.arrow} ${E.person} **Total:** \`${clienteIds.length}\``
         ).setTimestamp()] });
 }
 
+// ─── Factura ──────────────────────────────────────────────────────────────────
 async function handleFactura(interaction) {
     const ordenId = interaction.options.getInteger('orden');
-    const data = loadData(interaction.guild.id);
-    const venta = data.ventas.find(v => v.id === ordenId);
-    if (!venta) return safeReply(interaction, { content: `⚠️ No existe la orden \`#${ordenId}\`.` });
-    if (venta.estado === 'cancelada') return safeReply(interaction, { content: `⚠️ La orden \`#${ordenId}\` fue cancelada.` });
+    const data    = loadData(interaction.guild.id);
+    const venta   = data.ventas.find(v => v.id === ordenId);
+    if (!venta)                   return safeReply(interaction, { content: `${EX.warning} No existe la orden \`#${ordenId}\`.` });
+    if (venta.estado === 'cancelada') return safeReply(interaction, { content: `${EX.warning} La orden \`#${ordenId}\` fue cancelada.` });
     const esAdmin = interaction.member.permissions.has(PermissionFlagsBits.ManageMessages);
     if (interaction.user.id !== venta.clienteId && !esAdmin)
         return safeReply(interaction, { content: '🚫 Solo el cliente o un administrador puede solicitar la factura.' });
-    const resena = data.resenas?.find(r => r.ordenId === ordenId);
+    const resena      = data.resenas?.find(r => r.ordenId === ordenId);
     const tierCliente = getTier(data.analytics?.porCliente?.[venta.clienteId]?.compras ?? 0);
     const totalCompras = data.analytics?.porCliente?.[venta.clienteId]?.compras ?? 0;
     const embedFactura = new EmbedBuilder().setColor('#57F287')
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
         .setTitle(`${E.invoice}  Factura — Orden \`#${ordenId}\``)
-        .setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
         .setDescription(
-            `**📋 Detalles del pedido**\n` +
-            `${E.arrow} ${E.orders} **Orden #:**   \`${venta.id}\`\n` +
-            `${E.arrow} ${E.caja} **Producto:**  \`${venta.producto}\`\n` +
-            `${E.arrow} ${E.money} **Cantidad:**  \`${formatRobux(venta.robux)}\`\n` +
-            `${E.arrow} 💵 **Precio:**    \`${venta.precio ?? 'No especificado'}\`\n` +
-            `${E.arrow} ${E.tarjeta} **Método:**    \`${venta.metodo}\`\n` +
-            `${E.arrow} 📅 **Fecha:**     \`${new Date(venta.timestamp).toLocaleString('es-MX')}\`\n\n` +
-            `**👤 Cliente**\n` +
-            `${E.arrow} 🏷️ <@${venta.clienteId}>\n` +
-            `${E.arrow} ${E.carrito} **Compras:** \`${totalCompras}\`\n` +
+            `**${EX.document} Detalles del pedido**\n` +
+            `${E.arrow} ${E.orders} **Orden #:** \`${venta.id}\`\n` +
+            `${E.arrow} ${E.caja} **Producto:** \`${venta.producto}\`\n` +
+            `${E.arrow} ${EX.dinero} **Monto:** \`${venta.monto ?? 'No especificado'}\`\n` +
+            `${E.arrow} 💵 **Precio:** \`${venta.precio ?? 'No especificado'}\`\n` +
+            `${E.arrow} ${E.tarjeta} **Método:** \`${venta.metodo}\`\n` +
+            `${E.arrow} 📅 **Fecha:** \`${new Date(venta.timestamp).toLocaleString('es-MX')}\`\n\n` +
+            `**${E.person} Cliente**\n` +
+            `${E.arrow} <@${venta.clienteId}> — Compras: \`${totalCompras}\`\n` +
             `${E.arrow} 🎖️ **Tier:** \`${tierCliente ? `${tierCliente.emoji} ${tierCliente.label}` : 'Sin tier'}\`\n\n` +
-            `**🤝 Operador**\n${E.arrow} <@${venta.vendedorId}> — \`${venta.vendedorTag}\`\n\n` +
-            (resena ? `**${E.review} Reseña**\n${E.arrow} ${estrellas(resena.estrellas)} \`${resena.estrellas}/5\`${resena.comentario ? ` — *"${resena.comentario}"*` : ''}${resena.imagen ? `\n${E.line} 📸 [Ver prueba](${resena.imagen})` : ''}\n\n` : '') +
+            `**${E.hand} Operador**\n${E.arrow} <@${venta.vendedorId}> — \`${venta.vendedorTag}\`\n\n` +
+            (resena ? `**${E.review} Reseña**\n${E.arrow} ${estrellas(resena.estrellas)} \`${resena.estrellas}/5\`${resena.comentario ? ` — *"${resena.comentario}"*` : ''}\n\n` : '') +
             `━━━━━━━━━━━━━━━━━━━━━━━━\n*Guarda este comprobante para consultas futuras.*`
-        ).setImage(BANNER_URL).setFooter({ text: `${interaction.guild.name} · powered by Aurex · ${today()}` }).setTimestamp(venta.timestamp);
+        ).setImage(BANNER_URL).setFooter({ text: `${interaction.guild.name} · ${EX.bluestar} Bot · ${today()}` }).setTimestamp(venta.timestamp);
     const clienteUser = await interaction.client.users.fetch(venta.clienteId).catch(() => null);
-    if (!clienteUser) return safeReply(interaction, { content: '⚠️ No se encontró al usuario cliente.' });
+    if (!clienteUser) return safeReply(interaction, { content: `${EX.warning} No se encontró al usuario cliente.` });
     const sent = await enviarDM(clienteUser, embedFactura);
-    return safeReply(interaction, { content: sent ? `${E.check} Factura enviada por DM a <@${venta.clienteId}>.` : `⚠️ No se pudo enviar el DM a <@${venta.clienteId}>. Tiene los DMs desactivados.` });
+    return safeReply(interaction, { content: sent ? `${E.check} Factura enviada por DM a <@${venta.clienteId}>.` : `${EX.warning} No se pudo enviar el DM. Tiene los DMs desactivados.` });
 }
 
+// ─── Servidor stats ───────────────────────────────────────────────────────────
 async function handleServidorStats(interaction) {
-    const ok = await safeDefer(interaction);
+    const ok    = await safeDefer(interaction);
     if (!ok) return;
     const data  = loadData(interaction.guild.id);
     const tdata = loadTickets(interaction.guild.id);
     const ventasActivas = data.ventas.filter(v => v.estado !== 'cancelada');
-    const topV = Object.entries(data.analytics.porVendedor ?? {}).sort((a, b) => b[1].ventas - a[1].ventas)[0];
-    const topC = Object.entries(data.analytics.porCliente  ?? {}).sort((a, b) => b[1].compras - a[1].compras)[0];
+    const topV   = Object.entries(data.analytics.porVendedor ?? {}).sort((a, b) => b[1].ventas - a[1].ventas)[0];
+    const topC   = Object.entries(data.analytics.porCliente  ?? {}).sort((a, b) => b[1].compras - a[1].compras)[0];
     const hoy    = ventasPorRango(ventasActivas, 'hoy');
     const semana = ventasPorRango(ventasActivas, 'semana');
     const mes    = ventasPorRango(ventasActivas, 'mes');
-    const totalResenas = data.resenas?.length ?? 0;
+    const totalResenas    = data.resenas?.length ?? 0;
     const promedioResenas = totalResenas > 0 ? (data.resenas.reduce((s, r) => s + r.estrellas, 0) / totalResenas).toFixed(1) : null;
     const tierConteo = { bronce: 0, plata: 0, oro: 0, vip: 0 };
     for (const [, c] of Object.entries(data.analytics.porCliente ?? {})) {
@@ -1305,22 +1342,126 @@ async function handleServidorStats(interaction) {
         .setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
         .setDescription(
             `**${E.orders} Pedidos**\n` +
-            `${E.arrow} 🌅 **Hoy:**         \`${hoy.length}\` — \`${formatRobux(hoy.reduce((s, v) => s + v.robux, 0))}\`\n` +
-            `${E.arrow} 📅 **Esta semana:** \`${semana.length}\` — \`${formatRobux(semana.reduce((s, v) => s + v.robux, 0))}\`\n` +
-            `${E.arrow} 🗓️ **Este mes:**    \`${mes.length}\` — \`${formatRobux(mes.reduce((s, v) => s + v.robux, 0))}\`\n` +
-            `${E.arrow} 📊 **Histórico:**   \`${ventasActivas.length}\` — \`${formatRobux(data.analytics.totalRobux)}\`\n\n` +
-            `**👥 Comunidad**\n` +
-            `${E.arrow} 🧑‍💼 **Clientes únicos:**   \`${new Set(ventasActivas.map(v => v.clienteId)).size}\`\n` +
-            `${E.arrow} 🤝 **Operadores activos:** \`${new Set(ventasActivas.map(v => v.vendedorId)).size}\`\n` +
-            `${E.arrow} ${E.ticket} **Tickets cerrados:**  \`${tdata.tickets.filter(t => t.estado === 'cerrado').length}\`\n` +
-            `${E.arrow} 📂 **Tickets abiertos:**  \`${tdata.tickets.filter(t => t.estado === 'abierto').length}\`\n` +
+            `${E.arrow} 🌅 **Hoy:** \`${hoy.length}\`\n` +
+            `${E.arrow} 📅 **Esta semana:** \`${semana.length}\`\n` +
+            `${E.arrow} 🗓️ **Este mes:** \`${mes.length}\`\n` +
+            `${E.arrow} 📊 **Histórico:** \`${ventasActivas.length}\`\n\n` +
+            `**${E.person} Comunidad**\n` +
+            `${E.arrow} 🧑‍💼 **Clientes únicos:** \`${new Set(ventasActivas.map(v => v.clienteId)).size}\`\n` +
+            `${E.arrow} ${E.hand} **Operadores activos:** \`${new Set(ventasActivas.map(v => v.vendedorId)).size}\`\n` +
+            `${E.arrow} ${E.ticket} **Tickets cerrados:** \`${tdata.tickets.filter(t => t.estado === 'cerrado').length}\`\n` +
             (promedioResenas ? `${E.arrow} ${E.review} **Valoración:** \`${promedioResenas}/5\` *(${totalResenas} reseñas)*\n` : '') +
-            `\n**🎖️ Distribución de Tiers**\n` +
-            `${E.line} 🥉 Bronce: \`${tierConteo.bronce}\`  🥈 Plata: \`${tierConteo.plata}\`  🥇 Oro: \`${tierConteo.oro}\`  ${E.diamante} VIP: \`${tierConteo.vip}\`\n\n` +
-            `**🏆 Destacados**\n` +
+            `\n**🎖️ Tiers**\n` +
+            `${E.line} 🥉 \`${tierConteo.bronce}\` · 🥈 \`${tierConteo.plata}\` · 🥇 \`${tierConteo.oro}\` · ${E.diamante} \`${tierConteo.vip}\`\n\n` +
+            `**${EX.bluecrown} Destacados**\n` +
             `${E.arrow} ${E.corona} **Top operador:** ${topV ? `<@${topV[0]}> (\`${topV[1].ventas}\` pedidos)` : '`Sin datos`'}\n` +
-            `${E.arrow} ${E.carrito} **Top cliente:**  ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}`
-        ).setImage(BANNER_URL).setFooter({ text: `Aurex · ${today()}` }).setTimestamp()] });
+            `${E.arrow} ${EX.carrito} **Top cliente:** ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}`
+        ).setImage(BANNER_URL).setFooter({ text: `${EX.bluestar} Bot · ${today()}` }).setTimestamp()] });
+}
+
+// ─── Club VIP ──────────────────────────────────────────────────────────────────
+async function handleClubVip(interaction) {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.ManageRoles))
+        return safeReply(interaction, { content: '🚫 Necesitas **Gestionar roles**.' });
+
+    const data       = loadData(interaction.guild.id);
+    const vipRoleId  = data.config.vipCommandRoleId;
+    if (!vipRoleId)
+        return safeReply(interaction, { content: `${EX.warning} Primero configura el rol VIP con \`/vip-setup\`.` });
+
+    const cliente     = interaction.options.getUser('cliente');
+    const durStr      = interaction.options.getString('duracion');
+    const durMs       = parseDuracion(durStr);
+    if (!durMs)
+        return safeReply(interaction, { content: `${EX.warning} Duración inválida. Usa: \`7d\`, \`30d\`, \`1m\` etc.` });
+
+    const expira     = Date.now() + durMs;
+    const expiraTs   = Math.floor(expira / 1000);
+
+    // Asignar rol
+    try {
+        const miembro = await interaction.guild.members.fetch(cliente.id).catch(() => null);
+        if (!miembro) return safeReply(interaction, { content: `${EX.warning} No se encontró al usuario en el servidor.` });
+        await miembro.roles.add(vipRoleId).catch(() => {});
+    } catch { /* no crítico */ }
+
+    // Guardar datos VIP
+    if (!data.vipMembers) data.vipMembers = {};
+    data.vipMembers[cliente.id] = {
+        roleId:    vipRoleId,
+        expira,
+        asignadoPor: interaction.user.id,
+        asignadoTag: interaction.user.tag,
+        clienteTag:  cliente.tag,
+        timestamp:   Date.now()
+    };
+    saveData(interaction.guild.id, data);
+
+    const embedLog = new EmbedBuilder().setColor('#FEE75C')
+        .setTitle(`${EX.bluecrown}  Club VIP activado`)
+        .setDescription(
+            `${E.arrow} ${E.person} **Usuario:** <@${cliente.id}>\n` +
+            `${E.arrow} ${EX.bluecrown} **Rol:** <@&${vipRoleId}>\n` +
+            `${E.arrow} ⏳ **Duración:** \`${formatDuracion(durStr)}\`\n` +
+            `${E.arrow} 📅 **Expira:** <t:${expiraTs}:F>\n` +
+            `${E.arrow} ${E.hand} **Asignado por:** <@${interaction.user.id}>`
+        ).setFooter({ text: `${EX.bluestar} Bot · ${today()}` }).setTimestamp();
+
+    // DM al cliente
+    const dmEmbed = new EmbedBuilder().setColor('#FEE75C')
+        .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
+        .setTitle(`${EX.bluecrown}  ¡Bienvenido al Club VIP!`)
+        .setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
+        .setDescription(
+            `¡Hola, **${cliente.username}**! 🎉 Tu membresía VIP ha sido activada.\n\n` +
+            `${E.arrow} ${EX.bluecrown} **Rol:** <@&${vipRoleId}>\n` +
+            `${E.arrow} ⏳ **Válido por:** \`${formatDuracion(durStr)}\`\n` +
+            `${E.arrow} 📅 **Expira:** <t:${expiraTs}:F>\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `*Disfruta tus beneficios exclusivos.*`
+        ).setFooter({ text: `${interaction.guild.name} · ${EX.bluestar} Bot` }).setTimestamp();
+
+    await enviarDM(cliente, dmEmbed);
+
+    return safeReply(interaction, { embeds: [embedLog] });
+}
+
+async function verificarVipExpirados() {
+    for (const guild of client.guilds.cache.values()) {
+        if (ALLOWED_GUILDS.length > 0 && !ALLOWED_GUILDS.includes(guild.id)) continue;
+        try {
+            const data  = loadData(guild.id);
+            if (!data.vipMembers || !Object.keys(data.vipMembers).length) continue;
+            const ahora = Date.now();
+            let cambio  = false;
+            for (const [userId, vipInfo] of Object.entries(data.vipMembers)) {
+                if (ahora < vipInfo.expira) continue;
+                // VIP expirado
+                cambio = true;
+                try {
+                    const miembro = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
+                    if (miembro && vipInfo.roleId) await miembro.roles.remove(vipInfo.roleId).catch(() => {});
+
+                    // DM de aviso
+                    const user = await client.users.fetch(userId).catch(() => null);
+                    if (user) {
+                        const embedExpira = new EmbedBuilder().setColor('#ED4245')
+                            .setAuthor({ name: guild.name, iconURL: guild.iconURL({ dynamic: true }) ?? undefined })
+                            .setTitle(`${EX.warning}  Tu membresía VIP ha expirado`)
+                            .setDescription(
+                                `¡Hola, **${user.username}**!\n\n` +
+                                `${E.arrow} Tu membresía **Club VIP** en **${guild.name}** ha llegado a su fin.\n\n` +
+                                `${EX.flecha} ¿Deseas renovarla?\n` +
+                                `${E.arrow} Abre un ticket de compra para continuar disfrutando de tus beneficios. 💙`
+                            ).setFooter({ text: `${guild.name} · ${EX.bluestar} Bot` }).setTimestamp();
+                        await enviarDM(user, embedExpira);
+                    }
+                } catch (e) { console.warn(`⚠️ VIP expirado [${userId}]:`, e?.message); }
+                delete data.vipMembers[userId];
+            }
+            if (cambio) saveData(guild.id, data);
+        } catch (e) { console.warn(`⚠️ verificarVipExpirados [${guild.name}]:`, e?.message); }
+    }
 }
 
 // ─── Recordatorios de tickets ─────────────────────────────────────────────────
@@ -1328,6 +1469,7 @@ async function verificarRecordatorios() {
     const LIMITE_MS = 60 * 60 * 1000;
     const ahora = Date.now();
     await Promise.allSettled([...client.guilds.cache.values()].map(async guild => {
+        if (ALLOWED_GUILDS.length > 0 && !ALLOWED_GUILDS.includes(guild.id)) return;
         try {
             const tdata = loadTickets(guild.id);
             if (!tdata.config.staffRoleId) return;
@@ -1337,16 +1479,16 @@ async function verificarRecordatorios() {
                 const ultimaActividad = ticket.ultimaActividad ?? ticket.timestamp;
                 if (ahora - ultimaActividad >= LIMITE_MS && !ticket.recordatorioEnviado) {
                     try {
-                        const canal = guild.channels.cache.get(ticket.channelId)
-                            ?? await guild.channels.fetch(ticket.channelId).catch(() => null);
+                        const canal = guild.channels.cache.get(ticket.channelId) ?? await guild.channels.fetch(ticket.channelId).catch(() => null);
                         if (!canal) continue;
                         const cat = CATEGORIAS[ticket.categoria] ?? { emoji: '🎫', label: 'Ticket' };
                         await canal.send({
                             content: `<@&${tdata.config.staffRoleId}>`,
-                            embeds: [new EmbedBuilder().setColor('#ED4245').setTitle(`${E.reloj}  Ticket sin respuesta`)
+                            embeds: [new EmbedBuilder().setColor('#ED4245')
+                                .setTitle(`${E.reloj}  Ticket sin respuesta`)
                                 .setDescription(
-                                    `${E.arrow} ${cat.emoji} **Ticket #${ticket.id}** (${cat.label})\n` +
-                                    `${E.arrow} 👤 **Usuario:** <@${ticket.userId}>\n` +
+                                    `${E.arrow} ${typeof cat.emoji === 'string' ? cat.emoji : ''} **Ticket #${ticket.id}** (${cat.label} ${ticket.numero ?? ''})\n` +
+                                    `${E.arrow} ${E.person} **Usuario:** <@${ticket.userId}>\n` +
                                     `${E.arrow} ⏱️ **Sin respuesta:** \`${tiempoRelativo(ahora - ultimaActividad)}\``
                                 ).setTimestamp()]
                         }).catch(() => {});
@@ -1359,29 +1501,33 @@ async function verificarRecordatorios() {
     }));
 }
 
+function actualizarActividadTicket(guildId, channelId) {
+    try {
+        const tdata  = loadTickets(guildId);
+        const ticket = tdata.tickets.find(t => t.channelId === channelId && t.estado === 'abierto');
+        if (!ticket) return;
+        ticket.ultimaActividad     = Date.now();
+        ticket.recordatorioEnviado = false;
+        saveTickets(guildId, tdata);
+    } catch { }
+}
+
+// ─── AFK ──────────────────────────────────────────────────────────────────────
+const AFK_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
 async function limpiarAfkExpirados() {
     for (const guild of client.guilds.cache.values()) {
+        if (ALLOWED_GUILDS.length > 0 && !ALLOWED_GUILDS.includes(guild.id)) continue;
         try {
-            const data = loadData(guild.id);
+            const data  = loadData(guild.id);
             const ahora = Date.now();
-            let cambio = false;
+            let cambio  = false;
             for (const [uid] of Object.entries(data.afk ?? {})) {
                 if (ahora - data.afk[uid].tiempo > AFK_TIMEOUT_MS) { delete data.afk[uid]; cambio = true; }
             }
             if (cambio) saveData(guild.id, data);
-        } catch { /* no crítico */ }
+        } catch { }
     }
-}
-
-function actualizarActividadTicket(guildId, channelId) {
-    try {
-        const tdata = loadTickets(guildId);
-        const ticket = tdata.tickets.find(t => t.channelId === channelId && t.estado === 'abierto');
-        if (!ticket) return;
-        ticket.ultimaActividad = Date.now();
-        ticket.recordatorioEnviado = false;
-        saveTickets(guildId, tdata);
-    } catch { /* no crítico */ }
 }
 
 // ─── Cliente Discord ──────────────────────────────────────────────────────────
@@ -1399,79 +1545,75 @@ client.on('warn',  (msg) => console.warn('⚠️ [Client warn]', msg));
 client.rest.on('error', (err) => { if (!isIgnorableError(err)) console.warn('⚠️ [REST]', err?.message); });
 client.rest.on('rateLimited', () => {});
 
-client.on('shardDisconnect', (event, id) => {
-    console.warn(`⚠️ Shard ${id} desconectado (code: ${event.code}). Intentando reconectar...`);
-});
-client.on('shardReconnecting', (id) => {
-    console.log(`🔄 Shard ${id} reconectando...`);
-});
-client.on('shardResume', (id, replayed) => {
-    console.log(`✅ Shard ${id} reconectado. Eventos replayados: ${replayed}`);
-});
-
 client.once('clientReady', () => {
     console.log(`✅ Bot listo como ${client.user.tag}`);
-    console.log(`📁 Directorio de datos: ${DATA_DIR}`);
-    client.user.setActivity('Aurex • /help 💎', { type: 3 });
+    console.log(`📁 Datos: ${DATA_DIR}`);
+    console.log(`🏠 Servidores: ${ALLOWED_GUILDS.length > 0 ? ALLOWED_GUILDS.join(', ') : 'todos'}`);
+    client.user.setActivity('Club VIP 💎 | /help', { type: 3 });
 
     setInterval(() => {
-        console.log(`💓 Keep-alive • ${new Date().toLocaleString('es-MX')} • ${client.ws.ping}ms • Guilds: ${client.guilds.cache.size}`);
+        console.log(`💓 Keep-alive • ${new Date().toLocaleString('es-MX')} • ${client.ws.ping}ms`);
     }, 5 * 60 * 1000);
 
     setInterval(async () => {
-        await verificarRecordatorios().catch(e => console.warn('⚠️ verificarRecordatorios:', e?.message));
-        await verificarSorteos().catch(e => console.warn('⚠️ verificarSorteos:', e?.message));
+        await verificarRecordatorios().catch(e => console.warn('⚠️ recordatorios:', e?.message));
+        await verificarSorteos().catch(e => console.warn('⚠️ sorteos:', e?.message));
+        await verificarVipExpirados().catch(e => console.warn('⚠️ vipExpirados:', e?.message));
     }, 5 * 60 * 1000);
 
     setInterval(limpiarAfkExpirados, 60 * 60 * 1000);
-
-    verificarSorteos().catch(e => console.warn('⚠️ verificarSorteos inicial:', e?.message));
+    verificarSorteos().catch(() => {});
+    verificarVipExpirados().catch(() => {});
 });
 
-// ─── Sistema AFK ──────────────────────────────────────────────────────────────
-const AFK_TIMEOUT_MS = 24 * 60 * 60 * 1000;
-
+// ─── messageCreate ────────────────────────────────────────────────────────────
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
+
+    // Ignorar si el servidor no está autorizado
+    if (ALLOWED_GUILDS.length > 0 && !ALLOWED_GUILDS.includes(message.guild.id)) return;
+
+    // No responder a @everyone ni @here
+    if (message.content.includes('@everyone') || message.content.includes('@here')) {
+        actualizarActividadTicket(message.guild.id, message.channel.id);
+        return;
+    }
+
     actualizarActividadTicket(message.guild.id, message.channel.id);
 
     // ── Prefijo de texto ──────────────────────────────────────────────────
     if (message.content.startsWith(PREFIX)) {
-        // FIX #5 (texto): cooldown básico para comandos de prefijo
         const espera = checkCooldown(message.guild.id, message.author.id, 'prefix', 3);
         if (espera > 0) return;
 
         const args = message.content.slice(PREFIX.length).trim().split(/ +/);
         const cmd  = args.shift().toLowerCase();
 
-        if (cmd === 'ping') {
-            return message.reply(`🏓 Pong! \`${Math.round(client.ws.ping)}ms\``).catch(() => {});
-        }
-        if (cmd === 'help') {
-            return message.reply({ embeds: [buildHelpInicio(message.guild)], components: buildHelpRows() }).catch(() => {});
-        }
+        if (cmd === 'ping')   return message.reply(`🏓 Pong! \`${Math.round(client.ws.ping)}ms\``).catch(() => {});
+        if (cmd === 'help')   return message.reply({ embeds: [buildHelpInicio(message.guild)], components: buildHelpRows() }).catch(() => {});
         if (cmd === 'reroll') {
             const sorteoId = args[0];
-            if (!sorteoId) return message.reply(`⚠️ Uso: \`${PREFIX}reroll <id_del_sorteo>\``).catch(() => {});
+            if (!sorteoId) return message.reply(`${EX.warning} Uso: \`${PREFIX}reroll <id_del_sorteo>\``).catch(() => {});
             return handleReroll(message, sorteoId);
         }
         return;
     }
 
-    // ── Sistema AFK ───────────────────────────────────────────────────────
+    // ── AFK ───────────────────────────────────────────────────────────────
     try {
-        const data = loadData(message.guild.id);
+        const data  = loadData(message.guild.id);
         const ahora = Date.now();
 
+        // Limpiar AFK expirados
         let limpiado = false;
-        for (const [uid, afkInfo] of Object.entries(data.afk ?? {})) {
-            if (ahora - afkInfo.tiempo > AFK_TIMEOUT_MS) { delete data.afk[uid]; limpiado = true; }
+        for (const [uid] of Object.entries(data.afk ?? {})) {
+            if (ahora - data.afk[uid].tiempo > AFK_TIMEOUT_MS) { delete data.afk[uid]; limpiado = true; }
         }
         if (limpiado) saveData(message.guild.id, data);
 
         // Volver del AFK
         if (data.afk[message.author.id]) {
-            const afkInfo = data.afk[message.author.id];
+            const afkInfo  = data.afk[message.author.id];
             const duracion = tiempoRelativo(ahora - afkInfo.tiempo);
             const menciones = afkInfo.menciones ?? [];
             delete data.afk[message.author.id];
@@ -1483,31 +1625,19 @@ client.on('messageCreate', async (message) => {
                     const nickSinAfk = miembro.nickname.replace('[AFK] ', '');
                     await miembro.setNickname(nickSinAfk === message.author.username ? null : nickSinAfk).catch(() => {});
                 }
-            } catch { /* sin permisos */ }
+            } catch { }
 
-            let desc = `### 👋  ¡Bienvenido de vuelta, ${message.author.username}!\n\n` +
-                `${E.arrow} ${E.reloj} Estuviste ausente **${duracion}**\n` +
-                `${E.arrow} 📝 Motivo: *${afkInfo.motivo}*\n`;
-
+            let desc = `### ${EX.nochee}  ¡De vuelta!\n\n${E.arrow} Estuviste ausente **${duracion}**\n${E.arrow} Motivo: *${afkInfo.motivo}*\n`;
             if (menciones.length > 0) {
                 desc += `\n**${E.campana} Te mencionaron ${menciones.length} vez${menciones.length > 1 ? 'es' : ''}:**\n`;
-                for (const m of menciones.slice(-10)) {
-                    desc += `${E.line} **[${m.tag}](${m.url})** en <#${m.channelId}> — <t:${Math.floor(m.timestamp / 1000)}:R>\n`;
-                    if (m.contenido) desc += `  └ *"${m.contenido.slice(0, 80)}${m.contenido.length > 80 ? '...' : ''}"*\n`;
+                for (const m of menciones.slice(-5)) {
+                    desc += `${E.line} **${m.tag}** en <#${m.channelId}> — <t:${Math.floor(m.timestamp / 1000)}:R>\n`;
                 }
-                if (menciones.length > 10) desc += `${E.line} *...y ${menciones.length - 10} más.*\n`;
             } else {
-                desc += `\n${E.line} *Nadie te mencionó mientras estabas ausente.*`;
+                desc += `\n${E.line} *Nadie te mencionó.*`;
             }
 
-            await message.reply({
-                embeds: [new EmbedBuilder()
-                    .setColor('#57F287')
-                    .setDescription(desc)
-                    .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
-                    .setFooter({ text: 'Aurex • AFK finalizado' })
-                    .setTimestamp()]
-            }).catch(() => {});
+            await message.reply({ embeds: [new EmbedBuilder().setColor('#57F287').setDescription(desc).setFooter({ text: `${EX.bluestar} Bot • AFK finalizado` }).setTimestamp()] }).catch(() => {});
             return;
         }
 
@@ -1519,56 +1649,42 @@ client.on('messageCreate', async (message) => {
                 const afkInfo = data.afk[usuario.id];
                 if (!afkInfo.menciones) afkInfo.menciones = [];
                 afkInfo.menciones.push({
-                    tag:       message.author.tag,
-                    userId:    message.author.id,
-                    url:       message.url,
-                    channelId: message.channel.id,
+                    tag: message.author.tag, userId: message.author.id,
+                    url: message.url, channelId: message.channel.id,
                     timestamp: ahora,
                     contenido: message.content.replace(/<@!?\d+>/g, '').trim() || null
                 });
                 modificado = true;
                 const durAFK = tiempoRelativo(ahora - afkInfo.tiempo);
-                await message.reply({
-                    embeds: [new EmbedBuilder()
-                        .setColor('#ED4245')
-                        .setDescription(
-                            `${E.arrow} 💤 **${usuario.username}** está en modo AFK hace **${durAFK}**\n` +
-                            `${E.line} *Motivo: ${afkInfo.motivo}*\n\n` +
-                            `${E.campana} Tu mención fue registrada y le avisaremos al volver.`
-                        )
-                        .setFooter({ text: 'Aurex • AFK' })
-                        .setTimestamp()]
-                }).catch(() => {});
+                await message.reply({ embeds: [new EmbedBuilder().setColor('#ED4245')
+                    .setDescription(
+                        `${E.arrow} 💤 **${usuario.username}** está AFK hace **${durAFK}**\n` +
+                        `${E.line} Motivo: *${afkInfo.motivo}*`
+                    ).setFooter({ text: `${EX.bluestar} Bot • AFK` }).setTimestamp()] }).catch(() => {});
             }
             if (modificado) saveData(message.guild.id, data);
         }
 
-        // Mención al bot
-        if (message.mentions.has(client.user)) {
-            await message.reply({
-                embeds: [new EmbedBuilder()
-                    .setColor('#5865F2')
-                    .setDescription(`### ${E.bot}  ¡Hola!\n\n${E.arrow} Usa \`/help\` para ver todos mis comandos.\n${E.arrow} Prefijo de texto: \`${PREFIX}\``)]
-            }).catch(() => {});
+        // Mención al bot (no @everyone/@here ya filtrado)
+        if (message.mentions.has(client.user) && !message.mentions.everyone) {
+            await message.reply({ embeds: [new EmbedBuilder().setColor('#5865F2')
+                .setDescription(`### ${E.bot}  ¡Hola!\n\n${E.arrow} Usa \`/help\` para ver mis comandos.\n${E.arrow} Prefijo de texto: \`${PREFIX}\``)] }).catch(() => {});
         }
     } catch (e) { if (!isIgnorableError(e)) console.warn('⚠️ messageCreate:', e?.message); }
 });
 
-// ─── Interactions ─────────────────────────────────────────────────────────────
+// ─── interactionCreate ────────────────────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
     try {
         if (!interaction.guild) return;
+        if (ALLOWED_GUILDS.length > 0 && !ALLOWED_GUILDS.includes(interaction.guild.id)) return;
 
         // ── Tickets ───────────────────────────────────────────────────────
         if (
             (interaction.isStringSelectMenu() && interaction.customId === 'ticket_categoria') ||
             (interaction.isModalSubmit()      && interaction.customId.startsWith('ticket_modal_')) ||
-            (interaction.isButton()           && interaction.customId.startsWith('ticket_cerrar_'))
+            (interaction.isButton()           && (interaction.customId.startsWith('ticket_cerrar_') || interaction.customId.startsWith('ticket_reclamar_')))
         ) return safeHandle(interaction, () => handleTicketInteraction(interaction));
-
-        // ── Stock bulk ────────────────────────────────────────────────────
-        if (interaction.isModalSubmit() && interaction.customId === 'stock_bulk_modal')
-            return safeHandle(interaction, () => handleStockBulkModal(interaction));
 
         // ── Sorteos ───────────────────────────────────────────────────────
         if (interaction.isButton() && interaction.customId.startsWith('sorteo_participar_'))
@@ -1591,60 +1707,46 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.isButton() && interaction.customId.startsWith('cancelar_confirm_')) {
             return safeHandle(interaction, async () => {
                 const ordenId = parseInt(interaction.customId.split('_')[2]);
-                const data = loadData(interaction.guild.id);
-                const venta = data.ventas.find(v => v.id === ordenId);
+                const data    = loadData(interaction.guild.id);
+                const venta   = data.ventas.find(v => v.id === ordenId);
                 if (!venta || venta.estado === 'cancelada')
-                    return interaction.update({ content: '⚠️ Esta orden ya fue procesada.', embeds: [], components: [] });
+                    return interaction.update({ content: `${EX.warning} Esta orden ya fue procesada.`, embeds: [], components: [] });
 
                 venta.estado = 'cancelada';
-
-                // FIX #7: eliminar reseña asociada al cancelar
-                if (data.resenas) {
-                    data.resenas = data.resenas.filter(r => r.ordenId !== ordenId);
-                }
-
+                if (data.resenas) data.resenas = data.resenas.filter(r => r.ordenId !== ordenId);
                 data.analytics.totalVentas = Math.max(0, data.analytics.totalVentas - 1);
-                data.analytics.totalRobux  = Math.max(0, data.analytics.totalRobux - venta.robux);
                 if (data.analytics.porVendedor[venta.vendedorId]) {
                     data.analytics.porVendedor[venta.vendedorId].ventas = Math.max(0, (data.analytics.porVendedor[venta.vendedorId].ventas ?? 1) - 1);
-                    data.analytics.porVendedor[venta.vendedorId].robux  = Math.max(0, (data.analytics.porVendedor[venta.vendedorId].robux  ?? 0) - venta.robux);
                 }
                 if (data.analytics.porCliente?.[venta.clienteId]) {
                     data.analytics.porCliente[venta.clienteId].compras = Math.max(0, (data.analytics.porCliente[venta.clienteId].compras ?? 1) - 1);
-                    data.analytics.porCliente[venta.clienteId].robux   = Math.max(0, (data.analytics.porCliente[venta.clienteId].robux   ?? 0) - venta.robux);
                 }
                 saveData(interaction.guild.id, data);
+                await actualizarTier(interaction.guild, venta.clienteId, data.analytics.porCliente?.[venta.clienteId]?.compras ?? 0, data.config.tierRoles);
 
-                // FIX #8: recalcular tier al bajar compras
-                await actualizarTier(
-                    interaction.guild,
-                    venta.clienteId,
-                    data.analytics.porCliente?.[venta.clienteId]?.compras ?? 0,
-                    data.config.tierRoles
-                );
-
-                return interaction.update({ embeds: [new EmbedBuilder().setColor('#ED4245').setTitle('❌  Orden cancelada')
+                return interaction.update({ embeds: [new EmbedBuilder().setColor('#ED4245')
+                    .setTitle(`${E.cruz}  Orden cancelada`)
                     .setDescription(
                         `${E.arrow} ${E.orders} **Orden:** \`#${ordenId}\`\n` +
                         `${E.arrow} ${E.caja} **Producto:** \`${venta.producto}\`\n` +
-                        `${E.arrow} 👤 **Cliente:** <@${venta.clienteId}>\n` +
+                        `${E.arrow} ${E.person} **Cliente:** <@${venta.clienteId}>\n` +
                         `${E.arrow} 🔨 **Por:** <@${interaction.user.id}>`
                     ).setTimestamp()], components: [] });
             });
         }
         if (interaction.isButton() && interaction.customId.startsWith('cancelar_abort_'))
-            return interaction.update({ content: '✅ Cancelación abortada.', embeds: [], components: [] }).catch(() => {});
+            return interaction.update({ content: `${E.check} Cancelación abortada.`, embeds: [], components: [] }).catch(() => {});
 
         // ── Reseña (botón) ────────────────────────────────────────────────
         if (interaction.isButton() && interaction.customId.startsWith('reseña_')) {
             return safeHandle(interaction, async () => {
                 const ordenId = parseInt(interaction.customId.split('_')[1]);
-                const data = loadData(interaction.guild.id);
-                const venta = data.ventas.find(v => v.id === ordenId);
+                const data    = loadData(interaction.guild.id);
+                const venta   = data.ventas.find(v => v.id === ordenId);
                 if (!venta || interaction.user.id !== venta.clienteId)
-                    return safeReply(interaction, { content: '⚠️ Solo el cliente puede dejar reseña.' });
+                    return safeReply(interaction, { content: `${EX.warning} Solo el cliente puede dejar reseña.` });
                 if (data.resenas.find(r => r.ordenId === ordenId))
-                    return safeReply(interaction, { content: '⚠️ Ya dejaste una reseña para esta orden.' });
+                    return safeReply(interaction, { content: `${EX.warning} Ya dejaste una reseña para esta orden.` });
                 return mostrarModalResena(interaction, ordenId);
             });
         }
@@ -1655,28 +1757,28 @@ client.on('interactionCreate', async (interaction) => {
                 const ordenId      = parseInt(interaction.customId.split('_')[2]);
                 const data         = loadData(interaction.guild.id);
                 const venta        = data.ventas.find(v => v.id === ordenId);
-                if (!venta) return safeReply(interaction, { content: '⚠️ Orden no encontrada.' });
+                if (!venta) return safeReply(interaction, { content: `${EX.warning} Orden no encontrada.` });
                 const numEstrellas = parseInt(interaction.fields.getTextInputValue('estrellas'));
                 const comentario   = interaction.fields.getTextInputValue('comentario') || null;
                 const imagenUrl    = interaction.fields.getTextInputValue('imagen_url') || null;
                 if (isNaN(numEstrellas) || numEstrellas < 1 || numEstrellas > 5)
-                    return safeReply(interaction, { content: '⚠️ Calificación del 1 al 5.' });
+                    return safeReply(interaction, { content: `${EX.warning} Calificación del 1 al 5.` });
                 let imagenValida = null;
-                if (imagenUrl) { try { new URL(imagenUrl); imagenValida = imagenUrl; } catch { /* ignorar */ } }
+                if (imagenUrl) { try { new URL(imagenUrl); imagenValida = imagenUrl; } catch { } }
                 if (!data.resenas) data.resenas = [];
                 data.resenas.push({ ordenId, clienteId: venta.clienteId, clienteTag: venta.clienteTag, vendedorId: venta.vendedorId, estrellas: numEstrellas, comentario, imagen: imagenValida, timestamp: Date.now() });
                 saveData(interaction.guild.id, data);
                 const embedResena = new EmbedBuilder().setColor('#FEE75C')
                     .setTitle(`${E.review}  Reseña — Orden \`#${ordenId}\``)
                     .setDescription(
-                        `${E.arrow} 👤 **Cliente:**  <@${venta.clienteId}>\n` +
-                        `${E.arrow} 🤝 **Operador:** <@${venta.vendedorId}>\n` +
-                        `${E.arrow} ${estrellas(numEstrellas)} \`${numEstrellas}/5\`\n` +
-                        (comentario ? `\n${E.line} *"${comentario}"*\n` : '') +
-                        (imagenValida ? `\n${E.line} 📸 *Imagen adjunta como prueba*` : '')
+                        `${E.arrow} ${E.person} **Cliente:** <@${venta.clienteId}>\n` +
+                        `${E.arrow} ${E.hand} **Operador:** <@${venta.vendedorId}>\n` +
+                        `${E.arrow} ${estrellas(numEstrellas)} \`${numEstrellas}/5\`` +
+                        (comentario ? `\n\n${E.line} *"${comentario}"*` : '') +
+                        (imagenValida ? `\n${E.line} 📸 *Imagen adjunta*` : '')
                     ).setTimestamp();
                 if (imagenValida) embedResena.setImage(imagenValida);
-                await safeReply(interaction, { content: '✅ ¡Gracias por tu reseña!', embeds: [embedResena] });
+                await safeReply(interaction, { content: `${E.check} ¡Gracias por tu reseña!`, embeds: [embedResena] });
                 if (data.config.resenaChannelId) {
                     const canal = interaction.guild.channels.cache.get(data.config.resenaChannelId);
                     if (canal) await canal.send({ embeds: [embedResena] }).catch(() => {});
@@ -1703,18 +1805,34 @@ client.on('interactionCreate', async (interaction) => {
             if (interaction.commandName === 'notificar')      return handleNotificar(interaction);
             if (interaction.commandName === 'factura')        return handleFactura(interaction);
             if (interaction.commandName === 'servidor-stats') return handleServidorStats(interaction);
+            if (interaction.commandName === 'clubvip')        return handleClubVip(interaction);
 
+            // ── vip-setup ─────────────────────────────────────────────────
+            if (interaction.commandName === 'vip-setup') {
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                    return safeReply(interaction, { content: '🚫 Solo administradores.' });
+                const rol = interaction.options.getRole('rol');
+                data.config.vipCommandRoleId = rol.id;
+                saveData(guild.id, data);
+                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#FEE75C')
+                    .setTitle(`${EX.bluecrown}  Club VIP configurado`)
+                    .setDescription(`${E.arrow} ${EX.bluecrown} **Rol VIP:** <@&${rol.id}>\n${E.line} *Ahora puedes usar \`/clubvip\` para asignar membresías.*`)
+                    .setTimestamp()] });
+            }
+
+            // ── setvip ────────────────────────────────────────────────────
             if (interaction.commandName === 'setvip') {
                 if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
                     return safeReply(interaction, { content: '🚫 Solo administradores.' });
                 const rol = interaction.options.getRole('rol');
                 data.config.vipRoleId = rol.id; saveData(guild.id, data);
                 return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#FEE75C')
-                    .setTitle(`${E.roles}  Rol VIP configurado`)
-                    .setDescription(`${E.arrow} ${E.diamante} **Rol VIP:** <@&${rol.id}>\n${E.arrow} 🎟️ Los miembros con este rol tendrán **doble entrada** en sorteos.`)
+                    .setTitle(`${EX.bluecrown}  Rol VIP (sorteos) configurado`)
+                    .setDescription(`${E.arrow} ${E.diamante} **Rol VIP:** <@&${rol.id}>`)
                     .setTimestamp()] });
             }
 
+            // ── settiers ──────────────────────────────────────────────────
             if (interaction.commandName === 'settiers') {
                 if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
                     return safeReply(interaction, { content: '🚫 Solo administradores.' });
@@ -1722,50 +1840,69 @@ client.on('interactionCreate', async (interaction) => {
                 const rolPlata  = interaction.options.getRole('plata');
                 const rolOro    = interaction.options.getRole('oro');
                 const rolVip    = interaction.options.getRole('vip');
+                const umbralBronce = interaction.options.getInteger('umbral_bronce');
+                const umbralPlata  = interaction.options.getInteger('umbral_plata');
+                const umbralOro    = interaction.options.getInteger('umbral_oro');
+                const umbralVip    = interaction.options.getInteger('umbral_vip');
                 if (!data.config.tierRoles) data.config.tierRoles = {};
                 if (rolBronce) data.config.tierRoles.bronce = rolBronce.id;
                 if (rolPlata)  data.config.tierRoles.plata  = rolPlata.id;
                 if (rolOro)    data.config.tierRoles.oro    = rolOro.id;
                 if (rolVip)    data.config.tierRoles.vip    = rolVip.id;
-                const sinCambios = !rolBronce && !rolPlata && !rolOro && !rolVip;
+
+                // Umbrales personalizables
+                if (!data.config.tierUmbrales) data.config.tierUmbrales = {};
+                if (umbralBronce != null) data.config.tierUmbrales.bronce = umbralBronce;
+                if (umbralPlata  != null) data.config.tierUmbrales.plata  = umbralPlata;
+                if (umbralOro    != null) data.config.tierUmbrales.oro    = umbralOro;
+                if (umbralVip    != null) data.config.tierUmbrales.vip    = umbralVip;
+
+                const sinCambios = !rolBronce && !rolPlata && !rolOro && !rolVip && umbralBronce == null && umbralPlata == null && umbralOro == null && umbralVip == null;
                 if (!sinCambios) saveData(guild.id, data);
+
                 const tr = data.config.tierRoles;
+                const tu = data.config.tierUmbrales ?? {};
                 return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.roles}  Tiers de compras`)
                     .setDescription(
-                        `${sinCambios ? `${E.line} *Mostrando configuración actual.*\n\n` : ''}` +
-                        `${E.arrow} 🥉 **Bronce** *(1+)*   → ${tr.bronce ? `<@&${tr.bronce}>` : '`Sin configurar`'}\n` +
-                        `${E.arrow} 🥈 **Plata**  *(5+)*   → ${tr.plata  ? `<@&${tr.plata}>`  : '`Sin configurar`'}\n` +
-                        `${E.arrow} 🥇 **Oro**    *(10+)*  → ${tr.oro    ? `<@&${tr.oro}>`    : '`Sin configurar`'}\n` +
-                        `${E.arrow} ${E.diamante} **VIP**    *(20+)*  → ${tr.vip    ? `<@&${tr.vip}>`    : '`Sin configurar`'}`
-                    ).setFooter({ text: sinCambios ? 'Sin cambios' : '✅ Guardado' }).setTimestamp()] });
+                        `${sinCambios ? `${E.line} *Configuración actual.*\n\n` : ''}` +
+                        `${E.arrow} 🥉 **Bronce** *(${tu.bronce ?? 1}+ compras)* → ${tr.bronce ? `<@&${tr.bronce}>` : '`Sin configurar`'}\n` +
+                        `${E.arrow} 🥈 **Plata** *(${tu.plata  ?? 5}+ compras)* → ${tr.plata  ? `<@&${tr.plata}>`  : '`Sin configurar`'}\n` +
+                        `${E.arrow} 🥇 **Oro** *(${tu.oro    ?? 10}+ compras)* → ${tr.oro    ? `<@&${tr.oro}>`    : '`Sin configurar`'}\n` +
+                        `${E.arrow} ${E.diamante} **VIP** *(${tu.vip ?? 20}+ compras)* → ${tr.vip ? `<@&${tr.vip}>` : '`Sin configurar`'}`
+                    ).setFooter({ text: sinCambios ? 'Sin cambios' : `${E.check} Guardado` }).setTimestamp()] });
             }
 
+            // ── vender ────────────────────────────────────────────────────
             if (interaction.commandName === 'vender') {
                 const espera = checkCooldown(guild.id, user.id, 'vender', 10);
                 if (espera > 0) return safeReply(interaction, { content: `${E.relojArena} Espera **${espera}s**.` });
                 const producto = interaction.options.getString('producto');
                 const clienteU = interaction.options.getUser('cliente');
                 const vendedor = interaction.options.getUser('vendedor');
-                const cantidad = interaction.options.getString('cantidad');
-                const precio   = interaction.options.getString('precio');
-                const metodo   = interaction.options.getString('metodo') ?? 'No especificado';
-                const robux    = parseRobux(cantidad);
-                if (!robux) return safeReply(interaction, { content: '⚠️ Cantidad inválida. Usa: `1000`, `1k`, `2.5k`.' });
+                const monto    = interaction.options.getString('monto')   ?? null;
+                const precio   = interaction.options.getString('precio')  ?? null;
+                const metodo   = interaction.options.getString('metodo')  ?? 'No especificado';
+                const notas    = interaction.options.getString('notas')   ?? null;
+
                 const n = nextVentaId(data.ventas);
-                const venta = { id: n, producto, clienteId: clienteU.id, clienteTag: clienteU.tag, vendedorId: vendedor.id, vendedorTag: vendedor.tag, robux, precio: precio ?? 'No especificado', metodo, timestamp: Date.now(), estado: 'completada' };
+                const venta = {
+                    id: n, producto,
+                    clienteId: clienteU.id, clienteTag: clienteU.tag,
+                    vendedorId: vendedor.id, vendedorTag: vendedor.tag,
+                    monto, precio, metodo, notas,
+                    timestamp: Date.now(), estado: 'completada'
+                };
                 data.ventas.push(venta);
                 data.analytics.totalVentas++;
-                data.analytics.totalRobux += robux;
-                if (!data.analytics.porVendedor[vendedor.id]) data.analytics.porVendedor[vendedor.id] = { ventas: 0, robux: 0, tag: vendedor.tag };
+                if (!data.analytics.porVendedor[vendedor.id]) data.analytics.porVendedor[vendedor.id] = { ventas: 0, tag: vendedor.tag };
                 data.analytics.porVendedor[vendedor.id].ventas++;
-                data.analytics.porVendedor[vendedor.id].robux += robux;
                 data.analytics.porVendedor[vendedor.id].tag = vendedor.tag;
-                if (!data.analytics.porCliente[clienteU.id]) data.analytics.porCliente[clienteU.id] = { compras: 0, robux: 0, tag: clienteU.tag };
+                if (!data.analytics.porCliente[clienteU.id]) data.analytics.porCliente[clienteU.id] = { compras: 0, tag: clienteU.tag };
                 data.analytics.porCliente[clienteU.id].compras++;
-                data.analytics.porCliente[clienteU.id].robux += robux;
                 data.analytics.porCliente[clienteU.id].tag = clienteU.tag;
                 saveData(guild.id, data);
                 await actualizarTier(guild, clienteU.id, data.analytics.porCliente[clienteU.id].compras, data.config.tierRoles);
+
                 const rowResena = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`reseña_${n}`).setLabel('⭐ Dejar reseña').setStyle(ButtonStyle.Secondary)
                 );
@@ -1777,56 +1914,52 @@ client.on('interactionCreate', async (interaction) => {
                 }
                 if (data.analytics.totalVentas % 10 === 0) {
                     await interaction.followUp({ embeds: [new EmbedBuilder().setColor('#FEE75C')
-                        .setTitle('🏆  ¡Hito alcanzado!')
-                        .setDescription(`${E.arrow} **${guild.name}** alcanzó **${data.analytics.totalVentas}** pedidos.\n${E.arrow} ${E.money} Total: \`${formatRobux(data.analytics.totalRobux)}\``)
+                        .setTitle(`${EX.bluecrown}  ¡Hito alcanzado!`)
+                        .setDescription(`${E.arrow} **${guild.name}** alcanzó **${data.analytics.totalVentas}** pedidos.`)
                         .setTimestamp()] }).catch(() => {});
                 }
                 return;
             }
 
+            // ── orden ──────────────────────────────────────────────────────
             if (interaction.commandName === 'orden') {
                 const venta = data.ventas.find(v => v.id === interaction.options.getInteger('id'));
-                if (!venta) return safeReply(interaction, { content: '⚠️ No existe esa orden.' });
+                if (!venta) return safeReply(interaction, { content: `${EX.warning} No existe esa orden.` });
                 const resena = data.resenas?.find(r => r.ordenId === venta.id);
-                const embedOrden = new EmbedBuilder().setColor(venta.estado === 'cancelada' ? '#ED4245' : '#5865F2')
+                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor(venta.estado === 'cancelada' ? '#ED4245' : '#5865F2')
                     .setTitle(`${venta.estado === 'cancelada' ? E.cruz : E.check}  Orden \`#${venta.id}\``)
                     .setDescription(
                         `${E.arrow} ${E.caja} **Producto:** \`${venta.producto}\`\n` +
-                        `${E.arrow} ${E.money} **Cantidad:** \`${formatRobux(venta.robux)}\`\n` +
-                        `${E.arrow} 💵 **Precio:**   \`${venta.precio}\`\n` +
-                        `${E.arrow} ${E.tarjeta} **Método:**   \`${venta.metodo}\`\n` +
+                        `${E.arrow} ${EX.dinero} **Monto:** \`${venta.monto ?? 'No especificado'}\`\n` +
+                        `${E.arrow} 💵 **Precio:** \`${venta.precio ?? 'No especificado'}\`\n` +
+                        `${E.arrow} ${E.tarjeta} **Método:** \`${venta.metodo}\`\n` +
+                        (venta.notas ? `${E.arrow} 📝 **Notas:** \`${venta.notas}\`\n` : '') +
                         `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                        `${E.arrow} 👤 **Cliente:**  <@${venta.clienteId}>\n` +
-                        `${E.arrow} 🤝 **Operador:** <@${venta.vendedorId}>\n\n` +
-                        `**${E.review} Reseña:** ${resena
-                            ? `${estrellas(resena.estrellas)} \`${resena.estrellas}/5\`` +
-                              (resena.comentario ? ` — *"${resena.comentario}"*` : '') +
-                              (resena.imagen ? `\n${E.line} 📸 [Ver prueba](${resena.imagen})` : '')
-                            : '*Sin reseña aún*'}`
-                    ).setFooter({ text: `Estado: ${venta.estado}` }).setTimestamp(venta.timestamp);
-                if (resena?.imagen) embedOrden.setImage(resena.imagen);
-                return safeReply(interaction, { embeds: [embedOrden] });
+                        `${E.arrow} ${E.person} **Cliente:** <@${venta.clienteId}>\n` +
+                        `${E.arrow} ${E.hand} **Operador:** <@${venta.vendedorId}>\n\n` +
+                        `**${E.review} Reseña:** ${resena ? `${estrellas(resena.estrellas)} \`${resena.estrellas}/5\`` + (resena.comentario ? ` — *"${resena.comentario}"*` : '') : '*Sin reseña aún*'}`
+                    ).setFooter({ text: `Estado: ${venta.estado}` }).setTimestamp(venta.timestamp)] });
             }
 
+            // ── buscar ────────────────────────────────────────────────────
             if (interaction.commandName === 'buscar') {
                 const objetivo = interaction.options.getUser('cliente');
-                const ventas = data.ventas.filter(v => v.clienteId === objetivo.id && v.estado !== 'cancelada');
+                const ventas   = data.ventas.filter(v => v.clienteId === objetivo.id && v.estado !== 'cancelada');
                 if (ventas.length === 0) return safeReply(interaction, { content: `📭 **${objetivo.username}** no tiene pedidos.` });
-                const ultimas = ventas.slice(-8).reverse();
-                const resenasCli = data.resenas?.filter(r => r.clienteId === objetivo.id) ?? [];
-                const promedio = resenasCli.length > 0 ? (resenasCli.reduce((s, r) => s + r.estrellas, 0) / resenasCli.length).toFixed(1) : null;
-                const tierCliente = getTier(data.analytics.porCliente?.[objetivo.id]?.compras ?? 0);
-                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`👤  Historial de ${objetivo.username}`).setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
+                const ultimas   = ventas.slice(-8).reverse();
+                const tierCli   = getTier(data.analytics.porCliente?.[objetivo.id]?.compras ?? 0);
+                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#5865F2')
+                    .setTitle(`${E.person}  Historial de ${objetivo.username}`)
+                    .setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
                     .setDescription(
-                        `${E.arrow} ${E.carrito} **Pedidos:** \`${ventas.length}\`\n` +
-                        `${E.arrow} ${E.money} **R$ gastados:** \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\`\n` +
-                        (promedio ? `${E.arrow} ${E.review} **Promedio:** \`${promedio}/5\`\n` : '') +
-                        (tierCliente ? `${E.arrow} 🎖️ **Tier:** \`${tierCliente.emoji} ${tierCliente.label}\`\n` : '') +
+                        `${E.arrow} ${EX.carrito} **Pedidos:** \`${ventas.length}\`\n` +
+                        (tierCli ? `${E.arrow} 🎖️ **Tier:** \`${tierCli.emoji} ${tierCli.label}\`\n` : '') +
                         `\n**Últimos pedidos:**\n` +
-                        ultimas.map(v => `${E.line} \`#${v.id}\` **${v.producto}** — \`${formatRobux(v.robux)}\` — <t:${Math.floor(v.timestamp / 1000)}:d>`).join('\n')
+                        ultimas.map(v => `${E.line} \`#${v.id}\` **${v.producto}** — <t:${Math.floor(v.timestamp / 1000)}:d>`).join('\n')
                     ).setFooter({ text: `Mostrando ${ultimas.length} de ${ventas.length}` }).setTimestamp()] });
             }
 
+            // ── historial ─────────────────────────────────────────────────
             if (interaction.commandName === 'historial') {
                 const rango   = interaction.options.getString('rango') ?? 'todo';
                 const filtroU = interaction.options.getUser('usuario');
@@ -1834,53 +1967,58 @@ client.on('interactionCreate', async (interaction) => {
                 if (filtroU) ventas = ventas.filter(v => v.clienteId === filtroU.id || v.vendedorId === filtroU.id);
                 if (ventas.length === 0) return safeReply(interaction, { content: '📭 No hay pedidos con ese filtro.' });
                 const ultimas = ventas.slice(-10).reverse();
-                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#5865F2').setTitle(`${E.orders}  Historial — ${guild.name}`)
+                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#5865F2')
+                    .setTitle(`${E.orders}  Historial — ${guild.name}`)
                     .setDescription(
                         ultimas.map(v => {
                             const t = v.estado === 'cancelada' ? '~~' : '';
-                            return `${E.line} \`#${v.id}\` ${t}**${v.producto}**${t} — \`${formatRobux(v.robux)}\` — <@${v.clienteId}>`;
+                            return `${E.line} \`#${v.id}\` ${t}**${v.producto}**${t} — <@${v.clienteId}>`;
                         }).join('\n') +
-                        `\n\n${E.arrow} 🧾 **Total:** \`${ventas.length}\`\n${E.arrow} ${E.money} **R$ movidos:** \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\``
+                        `\n\n${E.arrow} 🧾 **Total:** \`${ventas.length}\``
                     ).setFooter({ text: `Últimos ${ultimas.length} de ${ventas.length}` }).setTimestamp()] });
             }
 
+            // ── reseña ────────────────────────────────────────────────────
             if (interaction.commandName === 'reseña') {
                 const ordenId = interaction.options.getInteger('orden');
-                const venta = data.ventas.find(v => v.id === ordenId);
-                if (!venta) return safeReply(interaction, { content: `⚠️ No existe la orden \`#${ordenId}\`.` });
-                if (venta.clienteId !== user.id) return safeReply(interaction, { content: '⚠️ Solo el cliente puede dejar reseña.' });
-                if (data.resenas?.find(r => r.ordenId === ordenId)) return safeReply(interaction, { content: '⚠️ Ya dejaste una reseña.' });
+                const venta   = data.ventas.find(v => v.id === ordenId);
+                if (!venta) return safeReply(interaction, { content: `${EX.warning} No existe la orden \`#${ordenId}\`.` });
+                if (venta.clienteId !== user.id) return safeReply(interaction, { content: `${EX.warning} Solo el cliente puede dejar reseña.` });
+                if (data.resenas?.find(r => r.ordenId === ordenId)) return safeReply(interaction, { content: `${EX.warning} Ya dejaste una reseña.` });
                 return mostrarModalResena(interaction, ordenId);
             }
 
+            // ── resenas ───────────────────────────────────────────────────
             if (interaction.commandName === 'resenas') {
                 const objetivo = interaction.options.getUser('vendedor');
                 const resenas  = data.resenas?.filter(r => r.vendedorId === objetivo.id) ?? [];
                 if (resenas.length === 0) return safeReply(interaction, { content: `📭 **${objetivo.username}** no tiene reseñas.` });
                 const promedio = (resenas.reduce((s, r) => s + r.estrellas, 0) / resenas.length).toFixed(1);
-                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.review}  Reseñas de ${objetivo.username}`).setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
+                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#FEE75C')
+                    .setTitle(`${E.review}  Reseñas de ${objetivo.username}`)
+                    .setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
                     .setDescription(
                         `${E.arrow} **Promedio:** \`${promedio}/5\` *(${resenas.length} reseña${resenas.length !== 1 ? 's' : ''})*\n\n` +
                         resenas.slice(-5).reverse().map(r =>
                             `${E.line} ${estrellas(r.estrellas)} <@${r.clienteId}>` +
-                            (r.comentario ? ` — *"${r.comentario}"*` : '') +
-                            (r.imagen ? ` — 📸 [prueba](${r.imagen})` : '')
+                            (r.comentario ? ` — *"${r.comentario}"*` : '')
                         ).join('\n')
                     ).setFooter({ text: `Últimas ${Math.min(5, resenas.length)} de ${resenas.length}` }).setTimestamp()] });
             }
 
+            // ── cancelar ──────────────────────────────────────────────────
             if (interaction.commandName === 'cancelar') {
                 if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
                     return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
                 const ordenId = interaction.options.getInteger('orden');
                 const venta   = data.ventas.find(v => v.id === ordenId);
-                if (!venta) return safeReply(interaction, { content: `⚠️ No existe la orden \`#${ordenId}\`.` });
-                if (venta.estado === 'cancelada') return safeReply(interaction, { content: '⚠️ Ya está cancelada.' });
-                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#ED4245').setTitle(`⚠️  ¿Cancelar orden \`#${ordenId}\`?`)
+                if (!venta) return safeReply(interaction, { content: `${EX.warning} No existe la orden \`#${ordenId}\`.` });
+                if (venta.estado === 'cancelada') return safeReply(interaction, { content: `${EX.warning} Ya está cancelada.` });
+                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#ED4245')
+                    .setTitle(`${EX.alert}  ¿Cancelar orden \`#${ordenId}\`?`)
                     .setDescription(
-                        `${E.arrow} ${E.orders} **Producto:** \`${venta.producto}\`\n` +
-                        `${E.arrow} 👤 **Cliente:**  <@${venta.clienteId}>\n` +
-                        `${E.arrow} ${E.money} **Cantidad:** \`${formatRobux(venta.robux)}\`\n\n` +
+                        `${E.arrow} ${E.caja} **Producto:** \`${venta.producto}\`\n` +
+                        `${E.arrow} ${E.person} **Cliente:** <@${venta.clienteId}>\n\n` +
                         `*Esta acción **no se puede deshacer**.*`
                     )],
                     components: [new ActionRowBuilder().addComponents(
@@ -1889,6 +2027,7 @@ client.on('interactionCreate', async (interaction) => {
                     )] });
             }
 
+            // ── exportar ──────────────────────────────────────────────────
             if (interaction.commandName === 'exportar') {
                 if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
                     return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
@@ -1896,77 +2035,76 @@ client.on('interactionCreate', async (interaction) => {
                 const ventas = ventasPorRango(data.ventas, rango).filter(v => v.estado !== 'cancelada');
                 if (ventas.length === 0) return safeReply(interaction, { content: '📭 No hay pedidos en ese período.' });
                 const etiquetas = { hoy: 'Hoy', semana: 'Esta semana', mes: 'Este mes' };
-                const totalRobux = ventas.reduce((s, v) => s + v.robux, 0);
                 const lineas = [`REPORTE — ${etiquetas[rango] ?? rango}`, `Servidor: ${guild.name}`, `Generado: ${new Date().toLocaleString('es-MX')}`, '─'.repeat(60), ''];
-                ventas.forEach(v => lineas.push(`#${v.id} | ${v.producto} | ${formatRobux(v.robux)} | ${v.precio} | ${v.metodo} | Cliente: ${v.clienteTag} | Operador: ${v.vendedorTag}`));
-                lineas.push('', '─'.repeat(60), `TOTAL: ${ventas.length} pedidos | ${formatRobux(totalRobux)}`);
-                const texto = lineas.join('\n');
+                ventas.forEach(v => lineas.push(`#${v.id} | ${v.producto} | ${v.monto ?? '-'} | ${v.precio ?? '-'} | ${v.metodo} | Cliente: ${v.clienteTag} | Operador: ${v.vendedorTag}`));
+                lineas.push('', '─'.repeat(60), `TOTAL: ${ventas.length} pedidos`);
                 return interaction.reply({
                     content: `${E.export} **${ventas.length}** pedidos exportados:`,
-                    files: [{ attachment: Buffer.from(texto, 'utf8'), name: `pedidos-${rango}.txt` }],
+                    files: [{ attachment: Buffer.from(lineas.join('\n'), 'utf8'), name: `pedidos-${rango}.txt` }],
                     flags: 64
                 });
             }
 
+            // ── perfil ────────────────────────────────────────────────────
             if (interaction.commandName === 'perfil') {
                 const objetivo     = interaction.options.getUser('usuario');
                 const comoVendedor = data.ventas.filter(v => v.vendedorId === objetivo.id && v.estado !== 'cancelada');
                 const comoCliente  = data.ventas.filter(v => v.clienteId  === objetivo.id && v.estado !== 'cancelada');
                 const resenas      = data.resenas?.filter(r => r.vendedorId === objetivo.id) ?? [];
                 const promedio     = resenas.length > 0 ? `${(resenas.reduce((s, r) => s + r.estrellas, 0) / resenas.length).toFixed(1)}/5` : 'Sin reseñas';
-                const tierCliente  = getTier(data.analytics.porCliente?.[objetivo.id]?.compras ?? 0);
+                const tierCli      = getTier(data.analytics.porCliente?.[objetivo.id]?.compras ?? 0);
                 const miembroObj   = guild.members.cache.get(objetivo.id);
                 const esVip        = esClienteVip(miembroObj, data.config?.vipRoleId ?? null);
                 return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#5865F2')
-                    .setTitle(`👤  ${objetivo.username}${esVip ? `  ${E.diamante} VIP` : ''}`)
+                    .setTitle(`${E.person}  ${objetivo.username}${esVip ? `  ${EX.bluecrown} VIP` : ''}`)
                     .setThumbnail(objetivo.displayAvatarURL({ dynamic: true }))
                     .setDescription(
-                        `**Como operador**\n` +
-                        `${E.arrow} 🧾 **Pedidos:**    \`${comoVendedor.length}\`\n` +
-                        `${E.arrow} ${E.money} **R$ movidos:** \`${formatRobux(comoVendedor.reduce((s, v) => s + v.robux, 0))}\`\n` +
+                        `**${E.hand} Como operador**\n` +
+                        `${E.arrow} 🧾 **Pedidos:** \`${comoVendedor.length}\`\n` +
                         `${E.arrow} ${E.review} **Valoración:** \`${promedio}\`\n\n` +
-                        `**Como cliente**\n` +
-                        `${E.arrow} ${E.carrito} **Compras:**    \`${comoCliente.length}\`\n` +
-                        `${E.arrow} ${E.money} **R$ gastados:** \`${formatRobux(comoCliente.reduce((s, v) => s + v.robux, 0))}\`\n` +
-                        `${E.arrow} 🎖️ **Tier:**       \`${tierCliente ? `${tierCliente.emoji} ${tierCliente.label}` : 'Sin tier'}\`` +
-                        (esVip ? `\n${E.arrow} 🎟️ **Sorteos:**    Doble entrada (VIP)` : '')
+                        `**${EX.carrito} Como cliente**\n` +
+                        `${E.arrow} ${EX.carrito} **Compras:** \`${comoCliente.length}\`\n` +
+                        `${E.arrow} 🎖️ **Tier:** \`${tierCli ? `${tierCli.emoji} ${tierCli.label}` : 'Sin tier'}\``
                     ).setFooter({ text: guild.name }).setTimestamp()] });
             }
 
+            // ── stats ─────────────────────────────────────────────────────
             if (interaction.commandName === 'stats') {
                 const rango  = interaction.options.getString('rango') ?? 'hoy';
                 const ventas = ventasPorRango(data.ventas, rango).filter(v => v.estado !== 'cancelada');
                 const etiquetas = { hoy: 'Hoy', semana: 'Esta semana', mes: 'Este mes' };
-                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.stats}  Stats — ${etiquetas[rango] ?? rango}`)
+                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#FEE75C')
+                    .setTitle(`${E.stats}  Stats — ${etiquetas[rango] ?? rango}`)
                     .setDescription(
-                        `${E.arrow} 🧾 **Pedidos:**         \`${ventas.length}\`\n` +
-                        `${E.arrow} ${E.money} **R$ movidos:**      \`${formatRobux(ventas.reduce((s, v) => s + v.robux, 0))}\`\n` +
-                        `${E.arrow} 👥 **Clientes únicos:** \`${new Set(ventas.map(v => v.clienteId)).size}\`\n\n` +
-                        `${E.line} 📦 **Total histórico:** \`${data.ventas.filter(v => v.estado !== 'cancelada').length}\`\n` +
-                        `${E.line} 💰 **Total R$ hist.:**  \`${formatRobux(data.analytics.totalRobux)}\``
+                        `${E.arrow} 🧾 **Pedidos:** \`${ventas.length}\`\n` +
+                        `${E.arrow} ${E.person} **Clientes únicos:** \`${new Set(ventas.map(v => v.clienteId)).size}\`\n\n` +
+                        `${E.line} 📦 **Total histórico:** \`${data.ventas.filter(v => v.estado !== 'cancelada').length}\``
                     ).setFooter({ text: guild.name }).setTimestamp()] });
             }
 
+            // ── top ───────────────────────────────────────────────────────
             if (interaction.commandName === 'top') {
-                const tipo = interaction.options.getString('tipo') ?? 'vendedores';
-                const por  = interaction.options.getString('por')  ?? 'ventas';
+                const tipo     = interaction.options.getString('tipo') ?? 'vendedores';
                 const medallas = ['🥇', '🥈', '🥉'];
                 if (tipo === 'compradores') {
                     const lista = Object.entries(data.analytics.porCliente ?? {})
                         .map(([id, d]) => ({ id, ...d })).filter(c => c.compras > 0)
-                        .sort((a, b) => por === 'robux' ? b.robux - a.robux : b.compras - a.compras).slice(0, 10);
+                        .sort((a, b) => b.compras - a.compras).slice(0, 10);
                     if (lista.length === 0) return safeReply(interaction, { content: '📭 Sin compras aún.' });
-                    return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#FEE75C').setTitle(`${E.corona}  Top compradores`)
-                        .setDescription(lista.map((c, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${c.id}> — \`${c.compras}\` compra(s) • \`${formatRobux(c.robux)}\``).join('\n')).setTimestamp()] });
+                    return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#FEE75C')
+                        .setTitle(`${EX.bluecrown}  Top compradores`)
+                        .setDescription(lista.map((c, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${c.id}> — \`${c.compras}\` compra(s)`).join('\n')).setTimestamp()] });
                 }
                 const lista = Object.entries(data.analytics.porVendedor)
                     .map(([id, d]) => ({ id, ...d })).filter(v => v.ventas > 0)
-                    .sort((a, b) => por === 'robux' ? b.robux - a.robux : b.ventas - a.ventas).slice(0, 10);
+                    .sort((a, b) => b.ventas - a.ventas).slice(0, 10);
                 if (lista.length === 0) return safeReply(interaction, { content: '📭 Sin pedidos aún.' });
-                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#57F287').setTitle('🏆  Top operadores')
-                    .setDescription(lista.map((v, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${v.id}> — \`${v.ventas}\` pedido(s) • \`${formatRobux(v.robux)}\``).join('\n')).setTimestamp()] });
+                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#57F287')
+                    .setTitle(`${EX.bluecrown}  Top operadores`)
+                    .setDescription(lista.map((v, i) => `> ${medallas[i] ?? `**${i + 1}.**`} <@${v.id}> — \`${v.ventas}\` pedido(s)`).join('\n')).setTimestamp()] });
             }
 
+            // ── dashboard ─────────────────────────────────────────────────
             if (interaction.commandName === 'dashboard') {
                 const hoy    = ventasPorRango(data.ventas, 'hoy').filter(v => v.estado !== 'cancelada');
                 const semana = ventasPorRango(data.ventas, 'semana').filter(v => v.estado !== 'cancelada');
@@ -1979,69 +2117,49 @@ client.on('interactionCreate', async (interaction) => {
                     .setTitle(`${E.analytics}  Dashboard — ${guild.name}`)
                     .setThumbnail(guild.iconURL({ dynamic: true }) ?? null)
                     .setDescription(
-                        `${E.arrow} 🌅 **Hoy:**         \`${hoy.length}\` pedidos • \`${formatRobux(hoy.reduce((s, v) => s + v.robux, 0))}\`\n` +
-                        `${E.arrow} 📅 **Esta semana:** \`${semana.length}\` pedidos • \`${formatRobux(semana.reduce((s, v) => s + v.robux, 0))}\`\n` +
-                        `${E.arrow} 🗓️ **Este mes:**    \`${mes.length}\` pedidos • \`${formatRobux(mes.reduce((s, v) => s + v.robux, 0))}\`\n` +
-                        `${E.arrow} 📦 **Histórico:**   \`${data.analytics.totalVentas}\` pedidos • \`${formatRobux(data.analytics.totalRobux)}\`\n\n` +
-                        `${E.arrow} 🏆 **Top operador:** ${topV ? `<@${topV[0]}> (\`${topV[1].ventas}\` pedidos)` : '`Sin datos`'}\n` +
-                        `${E.arrow} ${E.corona} **Top cliente:**  ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}` +
-                        (prom ? `\n${E.arrow} ${E.review} **Valoración:**  \`${prom}/5\` *(${totalR} reseñas)*` : '')
-                    ).setFooter({ text: 'Aurex' }).setTimestamp()] });
+                        `${E.arrow} 🌅 **Hoy:** \`${hoy.length}\` pedidos\n` +
+                        `${E.arrow} 📅 **Esta semana:** \`${semana.length}\` pedidos\n` +
+                        `${E.arrow} 🗓️ **Este mes:** \`${mes.length}\` pedidos\n` +
+                        `${E.arrow} 📦 **Histórico:** \`${data.analytics.totalVentas}\` pedidos\n\n` +
+                        `${E.arrow} ${EX.bluecrown} **Top operador:** ${topV ? `<@${topV[0]}> (\`${topV[1].ventas}\` pedidos)` : '`Sin datos`'}\n` +
+                        `${E.arrow} ${E.corona} **Top cliente:** ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}` +
+                        (prom ? `\n${E.arrow} ${E.review} **Valoración:** \`${prom}/5\` *(${totalR} reseñas)*` : '')
+                    ).setFooter({ text: `${EX.bluestar} Bot` }).setTimestamp()] });
             }
 
+            // ── afk ───────────────────────────────────────────────────────
             if (interaction.commandName === 'afk') {
                 const motivo = interaction.options.getString('motivo') ?? 'Sin motivo';
-                if (data.afk[user.id]) {
-                    const anterior = data.afk[user.id];
-                    data.afk[user.id] = { motivo, tiempo: Date.now(), menciones: [] };
-                    saveData(guild.id, data);
-                    return safeReplyPublic(interaction, { embeds: [new EmbedBuilder()
-                        .setColor('#FEE75C')
-                        .setDescription(
-                            `### ${E.advertencia}  AFK actualizado\n\n` +
-                            `${E.arrow} AFK anterior removido: *${anterior.motivo}*\n` +
-                            `${E.arrow} Nuevo AFK activo: *${motivo}*`
-                        ).setTimestamp()] });
-                }
                 data.afk[user.id] = { motivo, tiempo: Date.now(), menciones: [] };
                 saveData(guild.id, data);
                 try {
                     const miembro = guild.members.cache.get(user.id);
                     if (miembro && guild.members.me.permissions.has(PermissionFlagsBits.ManageNicknames)) {
-                        // FIX #3: evitar doble prefijo [AFK] en el nick
                         const nickActual = miembro.nickname ?? miembro.user.username;
-                        const nickLimpio = nickActual.startsWith('[AFK] ')
-                            ? nickActual.replace('[AFK] ', '')
-                            : nickActual;
-                        const nickBase = nickLimpio.slice(0, 25);
-                        await miembro.setNickname(`[AFK] ${nickBase}`).catch(() => {});
+                        const nickLimpio = nickActual.startsWith('[AFK] ') ? nickActual.replace('[AFK] ', '') : nickActual;
+                        await miembro.setNickname(`[AFK] ${nickLimpio.slice(0, 25)}`).catch(() => {});
                     }
-                } catch { /* sin permisos */ }
-                return safeReplyPublic(interaction, { embeds: [new EmbedBuilder()
-                    .setColor('#3498DB')
-                    .setTitle('💤  AFK activado')
+                } catch { }
+                return safeReplyPublic(interaction, { embeds: [new EmbedBuilder().setColor('#3498DB')
+                    .setTitle(`${EX.nochee}  AFK activado`)
                     .setDescription(
-                        `${E.arrow} 👤 **${user.username}** está ahora en modo AFK\n` +
+                        `${E.arrow} 💤 **${user.username}** está en modo AFK\n` +
                         `${E.arrow} 📝 **Motivo:** *${motivo}*\n` +
                         `${E.arrow} ${E.reloj} **Desde:** <t:${Math.floor(Date.now() / 1000)}:R>\n\n` +
-                        `${E.line} *Escribe cualquier mensaje para volver del AFK.*\n` +
-                        `${E.line} *Las menciones serán guardadas y te avisarán al regresar.*`
-                    )
-                    .setThumbnail(user.displayAvatarURL({ dynamic: true }))
-                    .setFooter({ text: 'Aurex • AFK' })
-                    .setTimestamp()] });
+                        `${E.line} *Escribe cualquier mensaje para volver.*`
+                    ).setThumbnail(user.displayAvatarURL({ dynamic: true }))
+                    .setFooter({ text: `${EX.bluestar} Bot • AFK` }).setTimestamp()] });
             }
 
+            // ── anuncio ───────────────────────────────────────────────────
             if (interaction.commandName === 'anuncio') {
                 if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
                     return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
                 const imagenUrl = interaction.options.getString('imagen') ?? null;
-                const embed = new EmbedBuilder()
-                    .setColor('#ED4245')
-                    .setTitle(`📢  ${interaction.options.getString('titulo')}`)
+                const embed = new EmbedBuilder().setColor('#ED4245')
+                    .setTitle(`${EX.alert}  ${interaction.options.getString('titulo')}`)
                     .setDescription(interaction.options.getString('mensaje'))
-                    .setFooter({ text: `Anuncio por ${user.tag} · Aurex` })
-                    .setTimestamp();
+                    .setFooter({ text: `Anuncio por ${user.tag} · ${EX.bluestar} Bot` }).setTimestamp();
                 if (imagenUrl) { try { new URL(imagenUrl); embed.setImage(imagenUrl); } catch {} }
                 const opts = { embeds: [embed] };
                 const textoBoton  = interaction.options.getString('texto_boton');
@@ -2051,131 +2169,53 @@ client.on('interactionCreate', async (interaction) => {
                         new ButtonBuilder().setLabel(textoBoton).setURL(enlaceBoton).setStyle(ButtonStyle.Link)
                     )];
                 }
-                await safeReply(interaction, { content: '✅ Anuncio enviado.' });
+                await safeReply(interaction, { content: `${E.check} Anuncio enviado.` });
                 return interaction.channel.send(opts).catch(() => {});
             }
 
+            // ── clear ─────────────────────────────────────────────────────
             if (interaction.commandName === 'clear') {
                 if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages))
                     return safeReply(interaction, { content: '🚫 Necesitas **Gestionar mensajes**.' });
                 const cantidad = interaction.options.getInteger('cantidad');
-                if (cantidad < 1 || cantidad > 100) return safeReply(interaction, { content: '⚠️ Entre 1 y 100.' });
+                if (cantidad < 1 || cantidad > 100) return safeReply(interaction, { content: `${EX.warning} Entre 1 y 100.` });
                 const ok = await safeDefer(interaction, true);
                 if (!ok) return;
-                // FIX #5: error específico para mensajes >14 días
                 const deleted = await interaction.channel.bulkDelete(cantidad, true).catch(e => {
-                    if (e.code === 50034)
-                        interaction.editReply({ content: '⚠️ No se pueden borrar mensajes con más de **14 días** de antigüedad.' });
-                    else
-                        interaction.editReply({ content: `⚠️ Error al borrar mensajes: \`${e.message}\`` });
+                    if (e.code === 50034) interaction.editReply({ content: `${EX.warning} No se pueden borrar mensajes con más de **14 días**.` });
+                    else interaction.editReply({ content: `${EX.warning} Error al borrar: \`${e.message}\`` });
                     return null;
                 });
-                if (deleted)
-                    return interaction.editReply({ content: `🗑️ **${deleted.size}** mensaje(s) eliminados.` });
+                if (deleted) return interaction.editReply({ content: `🗑️ **${deleted.size}** mensaje(s) eliminados.` });
                 return;
             }
 
+            // ── setlog ────────────────────────────────────────────────────
             if (interaction.commandName === 'setlog') {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-                    return safeReply(interaction, { content: '🚫 Solo administradores.' });
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
                 data.config.logChannelId = interaction.options.getChannel('canal').id;
                 saveData(guild.id, data);
                 return safeReply(interaction, { content: `${E.settings} Canal de logs: <#${data.config.logChannelId}>` });
             }
             if (interaction.commandName === 'setresenas') {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-                    return safeReply(interaction, { content: '🚫 Solo administradores.' });
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
                 data.config.resenaChannelId = interaction.options.getChannel('canal').id;
                 saveData(guild.id, data);
                 return safeReply(interaction, { content: `${E.settings} Canal de reseñas: <#${data.config.resenaChannelId}>` });
             }
             if (interaction.commandName === 'configdm') {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-                    return safeReply(interaction, { content: '🚫 Solo administradores.' });
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
                 data.config.dmEnabled = interaction.options.getBoolean('estado');
                 saveData(guild.id, data);
                 return safeReply(interaction, { content: `${E.settings} DMs: **${data.config.dmEnabled ? 'activados ✅' : 'desactivados ❌'}**` });
             }
             if (interaction.commandName === 'setdm') {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-                    return safeReply(interaction, { content: '🚫 Solo administradores.' });
-                const texto = interaction.options.getString('texto');
-                data.config.dmCierreTexto = texto;
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+                data.config.dmCierreTexto = interaction.options.getString('texto');
                 saveData(guild.id, data);
                 return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#57F287')
                     .setTitle(`${E.settings}  Mensaje de cierre actualizado`)
-                    .setDescription(`${E.line} ${texto.replace(/\n/g, `\n${E.line} `)}\n\n*Variables: \`{usuario}\` \`{servidor}\`*`)] });
-            }
-
-            if (interaction.commandName === 'stock') {
-                const stock = data.stock ?? [];
-                if (stock.length === 0) return safeReply(interaction, { content: '📭 El stock está vacío.' });
-                const lineas = stock.map(item =>
-                    `${E.arrowR} **${item.nombre}**\n` +
-                    `${E.arrow} 🔢 Cantidad: \`${item.cantidad}\`\n` +
-                    `${E.arrow} 💵 Precio:   \`${item.precio ?? 'No especificado'}\`\n` +
-                    `${E.arrow} 📝 Notas:    \`${item.notas ?? '—'}\``
-                ).join('\n\n');
-                return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#5865F2')
-                    .setTitle(`${E.stock}  Stock disponible`)
-                    .setDescription(lineas)
-                    .setFooter({ text: `${stock.length} ítem(s) • ${guild.name} · Aurex` })
-                    .setTimestamp()] });
-            }
-
-            if (interaction.commandName === 'stock-admin') {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-                    return safeReply(interaction, { content: '🚫 Solo administradores.' });
-                const accion   = interaction.options.getString('accion');
-                const nombre   = interaction.options.getString('nombre');
-                const cantidad = interaction.options.getInteger('cantidad');
-                const precio   = interaction.options.getString('precio');
-                const notas    = interaction.options.getString('notas');
-                if (!data.stock) data.stock = [];
-                if (accion === 'agregar') {
-                    data.stock.push({ nombre, cantidad: cantidad ?? 0, precio: precio ?? null, notas: notas ?? null });
-                    saveData(guild.id, data);
-                    return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#57F287')
-                        .setTitle(`${E.stock}  Ítem agregado`)
-                        .setDescription(`${E.arrow} ${E.caja} **${nombre}** — \`${cantidad ?? 0}\` unidades — \`${precio ?? 'Sin precio'}\``)] });
-                }
-                if (accion === 'editar') {
-                    const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre?.toLowerCase());
-                    if (idx === -1) return safeReply(interaction, { content: `⚠️ No existe \`${nombre}\`.` });
-                    if (cantidad !== null && cantidad !== undefined) data.stock[idx].cantidad = cantidad;
-                    if (precio  !== null && precio  !== undefined) data.stock[idx].precio   = precio;
-                    if (notas   !== null && notas   !== undefined) data.stock[idx].notas    = notas;
-                    saveData(guild.id, data);
-                    return safeReply(interaction, { content: `${E.check} \`${data.stock[idx].nombre}\` actualizado.` });
-                }
-                if (accion === 'eliminar') {
-                    const idx = data.stock.findIndex(i => i.nombre.toLowerCase() === nombre?.toLowerCase());
-                    if (idx === -1) return safeReply(interaction, { content: `⚠️ No existe \`${nombre}\`.` });
-                    data.stock.splice(idx, 1); saveData(guild.id, data);
-                    return safeReply(interaction, { content: `🗑️ **${nombre}** eliminado.` });
-                }
-                if (accion === 'limpiar') {
-                    data.stock = []; saveData(guild.id, data);
-                    return safeReply(interaction, { content: '🗑️ Stock limpiado.' });
-                }
-            }
-
-            if (interaction.commandName === 'stock-bulk') {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-                    return safeReply(interaction, { content: '🚫 Solo administradores.' });
-                const modal = new ModalBuilder().setCustomId('stock_bulk_modal').setTitle(`${E.caja} Carga masiva de stock`);
-                modal.addComponents(
-                    new ActionRowBuilder().addComponents(
-                        new TextInputBuilder().setCustomId('items_texto').setLabel('Ítems — uno por línea').setStyle(TextInputStyle.Paragraph)
-                            .setPlaceholder('Nombre | cantidad | precio | notas\n\nEjemplos:\nRobux 1000 | 10 | $5 USD | Entrega inmediata\nCuenta Premium | 3 | $15 USD')
-                            .setRequired(true).setMaxLength(3000)
-                    ),
-                    new ActionRowBuilder().addComponents(
-                        new TextInputBuilder().setCustomId('modo_valor').setLabel('Modo: "agregar" o "reemplazar"').setStyle(TextInputStyle.Short)
-                            .setPlaceholder('agregar').setRequired(false).setMaxLength(10)
-                    )
-                );
-                return interaction.showModal(modal);
+                    .setDescription(`${E.line} ${data.config.dmCierreTexto}\n\n*Variables: \`{usuario}\` \`{servidor}\`*`)] });
             }
         });
     } catch (e) { if (!isIgnorableError(e)) console.error('❌ interactionCreate:', e?.message); }
@@ -2185,16 +2225,15 @@ client.on('interactionCreate', async (interaction) => {
 function mostrarModalResena(interaction, ordenId) {
     const modal = new ModalBuilder().setCustomId(`modal_resena_${ordenId}`).setTitle(`⭐ Reseña — Orden #${ordenId}`);
     modal.addComponents(
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('estrellas').setLabel('Calificación (1 a 5 ⭐)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1).setPlaceholder('Número del 1 al 5')),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('estrellas').setLabel('Calificación (1 a 5 ⭐)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1).setPlaceholder('1 – 5')),
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('comentario').setLabel('Comentario (opcional)').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(300).setPlaceholder('Cuéntanos tu experiencia...')),
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('imagen_url').setLabel('URL de imagen / prueba (opcional)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('https://imgur.com/...'))
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('imagen_url').setLabel('URL de imagen (opcional)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('https://imgur.com/...'))
     );
     return interaction.showModal(modal).catch(() => {});
 }
 
 // ─── Login ────────────────────────────────────────────────────────────────────
 client.login(process.env.TOKEN).catch(err => {
-    console.error('❌ FATAL: No se pudo conectar a Discord:', err.message);
-    console.error('   Verifica que el TOKEN sea válido y que el bot tenga los intents habilitados en el portal de Discord.');
+    console.error('❌ FATAL: No se pudo conectar:', err.message);
     process.exit(1);
 });
