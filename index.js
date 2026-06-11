@@ -18,7 +18,7 @@ if (!process.env.TOKEN) {
 
 const BANNER_URL = 'https://i.imgur.com/RHLSmgM.png';
 
-// ─── Emojis externos (CORREGIDOS: animados con <a:>) ─────────────────────────
+// ─── Emojis externos ──────────────────────────────────────────────────────────
 const EX = {
     gifr:      '<:Gifr:1514442443209052281>',
     flecha:    '<a:Flecha:1513677979950252193>',
@@ -33,6 +33,7 @@ const EX = {
     document:  '<a:document:1514443447443128391>',
     discordss: '<:discordss:1514444199175393370>',
     boost:     '<a:boost:1514445334947037214>',
+    // bluestar: si el emoji no renderiza en tu servidor, cámbialo por '⭐'
     bluestar:  '<a:Bluestar:1514445439045210173>',
 };
 
@@ -228,13 +229,12 @@ process.on('warning', (w) => { if (w.name !== 'MaxListenersExceededWarning') con
 
 // ─── Helpers de interacción ───────────────────────────────────────────────────
 async function safeReply(interaction, opts) {
-    const o = { ...opts };
-    if (o.ephemeral === true) { o.flags = 64; delete o.ephemeral; }
-    if (!o.flags) o.flags = 64;
+    const o = { ...opts, flags: opts.flags ?? 64 };
+    delete o.ephemeral;
     try {
-        if (interaction.replied)  return await interaction.followUp({ ...o });
+        if (interaction.replied)  return await interaction.followUp(o);
         if (interaction.deferred) return await interaction.editReply(o);
-        return await interaction.reply({ ...o });
+        return await interaction.reply(o);
     } catch (e) { if (!isIgnorableError(e)) console.warn('⚠️ [safeReply]', e?.message); }
 }
 async function safeReplyPublic(interaction, opts) {
@@ -255,12 +255,23 @@ async function safeUpdate(interaction, opts) {
         return await interaction.update(opts);
     } catch (e) { if (!isIgnorableError(e)) console.warn('⚠️ safeUpdate:', e.message); }
 }
+
+// ─── FIX CRÍTICO: safeHandle corregido ───────────────────────────────────────
+// No intenta responder si ya se respondió — evita el doble disparo
 async function safeHandle(interaction, fn) {
-    try { await fn(); }
-    catch (err) {
+    try {
+        await fn();
+    } catch (err) {
         if (isIgnorableError(err)) return;
         console.error(`❌ [safeHandle] ${interaction.commandName ?? interaction.customId ?? '?'}:`, err.message ?? err);
-        await safeReply(interaction, { content: '⚠️ Ocurrió un error inesperado. Intenta de nuevo.' });
+        try {
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({ content: '⚠️ Ocurrió un error inesperado. Intenta de nuevo.', flags: 64 });
+            } else if (interaction.deferred && !interaction.replied) {
+                await interaction.editReply({ content: '⚠️ Ocurrió un error inesperado. Intenta de nuevo.' });
+            }
+            // Si ya respondió (replied = true), no hacer nada — la respuesta ya existe
+        } catch { /* ignorar errores al intentar notificar el error */ }
     }
 }
 
@@ -403,7 +414,7 @@ function buildDMVentaEmbed(venta, n, guildName, guildIconURL) {
             `${E.arrow} ${E.orders} **Orden #:** \`${n}\`\n\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
             `*Guarda tu número de orden para cualquier consulta.*`
-        ).setFooter({ text: `${guildName} · ${EX.bluestar} Bot` }).setTimestamp();
+        ).setFooter({ text: `${guildName} · Bot` }).setTimestamp();
 }
 function buildVentaPublicaEmbed(venta, n) {
     return new EmbedBuilder().setColor('#5865F2')
@@ -433,7 +444,7 @@ const HELP_CATEGORIAS = {
                 `**\`/cancelar [orden]\`**\n${E.arrow} Cancela una orden con confirmación.\n\n` +
                 `**\`/exportar\`**\n${E.arrow} Descarga un .txt con pedidos del período.\n\n` +
                 `**\`/factura [orden]\`**\n${E.arrow} Envía comprobante por DM al cliente.`
-            ).setFooter({ text: `${EX.bluestar} Bot • /help • Pedidos` }).setTimestamp()
+            ).setFooter({ text: `Bot • /help • Pedidos` }).setTimestamp()
     },
     analiticas: {
         label: 'Analíticas',
@@ -445,7 +456,7 @@ const HELP_CATEGORIAS = {
                 `**\`/dashboard\`**\n${E.arrow} Resumen visual completo.\n\n` +
                 `**\`/servidor-stats\`**\n${E.arrow} Tarjeta completa del servidor.\n\n` +
                 `**\`/perfil [usuario]\`**\n${E.arrow} Estadísticas completas de un usuario.`
-            ).setFooter({ text: `${EX.bluestar} Bot • /help • Analíticas` }).setTimestamp()
+            ).setFooter({ text: `Bot • /help • Analíticas` }).setTimestamp()
     },
     reputacion: {
         label: 'Reputación',
@@ -454,7 +465,7 @@ const HELP_CATEGORIAS = {
                 `${EX.flecha} Sistema de valoraciones.\n\n` +
                 `**\`/reseña [orden]\`**\n${E.arrow} Califica del 1 al 5 una orden.\n\n` +
                 `**\`/resenas [vendedor]\`**\n${E.arrow} Ver promedio y últimas valoraciones.`
-            ).setFooter({ text: `${EX.bluestar} Bot • /help • Reputación` }).setTimestamp()
+            ).setFooter({ text: `Bot • /help • Reputación` }).setTimestamp()
     },
     tickets: {
         label: 'Tickets',
@@ -462,12 +473,12 @@ const HELP_CATEGORIAS = {
             .setDescription(
                 `${EX.flecha} Sistema de atención al cliente.\n\n` +
                 `**\`/ticket-setup\`**\n${E.arrow} Configura y envía el panel de tickets.\n\n` +
-                `**Tipos:** ${EX.carrito} Comprar · 🎧 Soporte · ${EX.warning} Reporte · ${EX.alert} Otros\n\n` +
+                `**Categorías:** 🛒 Comprar · 🎧 Soporte · 🤝 Alianzas · ⚠️ Reportes · 🔔 Otros\n\n` +
                 `${E.arrow} ${E.relojArena} Cooldown de **5 minutos** entre tickets.\n` +
                 `${E.arrow} ${E.scroll} Transcript automático al cerrar.\n` +
                 `${E.arrow} ${EX.nochee} Staff puede **reclamar** tickets.\n` +
                 `${E.arrow} ${E.campana} Recordatorio al staff si hay >60 min sin respuesta.`
-            ).setFooter({ text: `${EX.bluestar} Bot • /help • Tickets` }).setTimestamp()
+            ).setFooter({ text: `Bot • /help • Tickets` }).setTimestamp()
     },
     utilidades: {
         label: 'Utilidades',
@@ -480,7 +491,7 @@ const HELP_CATEGORIAS = {
                 `**\`/sorteo\`**\n${E.arrow} Crea un sorteo con roles y participaciones.\n\n` +
                 `**\`/clear [cantidad]\`**\n${E.arrow} Borra hasta 100 mensajes.\n\n` +
                 `**\`/ping\`**\n${E.arrow} Latencia actual del bot.`
-            ).setFooter({ text: `${EX.bluestar} Bot • /help • Utilidades` }).setTimestamp()
+            ).setFooter({ text: `Bot • /help • Utilidades` }).setTimestamp()
     },
     config: {
         label: 'Configuración',
@@ -492,7 +503,7 @@ const HELP_CATEGORIAS = {
                 `**\`/setvip [rol]\`**\n${E.arrow} Rol VIP para sorteos.\n\n` +
                 `**\`/vip-setup\`**\n${E.arrow} Configura el comando /clubvip.\n\n` +
                 `**\`/clubvip\`**\n${E.arrow} Asigna membresía VIP con duración.`
-            ).setFooter({ text: `${EX.bluestar} Bot • /help • Configuración` }).setTimestamp()
+            ).setFooter({ text: `Bot • /help • Configuración` }).setTimestamp()
     }
 };
 
@@ -510,7 +521,7 @@ function buildHelpInicio(guild) {
             `${E.settings} **Configuración** — Ajustes del servidor`
         )
         .setThumbnail(guild?.iconURL({ dynamic: true }) ?? null)
-        .setFooter({ text: `${EX.bluestar} Bot • ${guild?.name ?? ''} · Usa los botones para navegar` })
+        .setFooter({ text: `Bot • ${guild?.name ?? ''} · Usa los botones para navegar` })
         .setTimestamp();
 }
 function buildHelpRows() {
@@ -532,13 +543,16 @@ function buildHelpRows() {
 // ─── Tickets ──────────────────────────────────────────────────────────────────
 const TICKET_COOLDOWN_MS = 5 * 60 * 1000;
 
+// ─── Categorías de ticket (5 categorías como en la imagen referencia) ─────────
 const CATEGORIAS = {
     comprar: {
         emoji: '🛒', label: 'Comprar',
         descripcion: '¿Estás interesado en adquirir nuestros productos?',
-        prefijo: 'compra', color: '#57F287',
+        // Nombre del canal: emoji + nombre de la categoría + número + usuario
+        nombreCanal: (num, slug) => `🛒・comprar-${num}-${slug}`,
+        color: '#57F287',
         bienvenida: (u) =>
-            `### ${EX.carrito}  Ticket de Compra\n` +
+            `### 🛒  Ticket de Compra\n` +
             `${EX.flecha} ¡Hola, **${u}**! Bienvenido a tu ticket de compra.\n` +
             `${E.arrow} Un operador te atenderá en breve.\n\n` +
             `**${EX.document} Para agilizar tu pedido:**\n` +
@@ -548,9 +562,10 @@ const CATEGORIAS = {
         modal: true
     },
     soporte: {
-        emoji: '🎧', label: 'Soporte',
-        descripcion: '¿Tienes alguna duda, problema o inconveniente?',
-        prefijo: 'soporte', color: '#3498DB',
+        emoji: '🎧', label: 'Dudas o Problemas',
+        descripcion: '¿Tienes alguna pregunta o inconveniente que necesite atención?',
+        nombreCanal: (num, slug) => `🎧・soporte-${num}-${slug}`,
+        color: '#3498DB',
         bienvenida: (u) =>
             `### 🎧  Ticket de Soporte\n` +
             `${EX.flecha} ¡Hola, **${u}**! Abriste un ticket de soporte.\n` +
@@ -561,12 +576,28 @@ const CATEGORIAS = {
             `${E.line} 📸 ¿Tienes capturas de pantalla?`,
         modal: false
     },
-    reporte: {
-        emoji: '⚠️', label: 'Reporte',
-        descripcion: '¿Necesitas reportar algo o a alguien?',
-        prefijo: 'reporte', color: '#ED4245',
+    alianzas: {
+        emoji: '🤝', label: 'Alianzas',
+        descripcion: '¿Quieres proponer una colaboración o formar parte de algo juntos?',
+        nombreCanal: (num, slug) => `🤝・alianzas-${num}-${slug}`,
+        color: '#9B59B6',
         bienvenida: (u) =>
-            `### ${EX.warning}  Ticket de Reporte\n` +
+            `### 🤝  Ticket de Alianza\n` +
+            `${EX.flecha} ¡Hola, **${u}**! Gracias por tu interés en colaborar.\n` +
+            `${E.arrow} Un miembro del equipo revisará tu propuesta.\n\n` +
+            `**${EX.document} Para evaluar tu propuesta:**\n` +
+            `${E.line} 🌐 ¿Con qué servidor o proyecto representas?\n` +
+            `${E.line} 📊 ¿Cuántos miembros activos tienen?\n` +
+            `${E.line} 💡 ¿Qué tipo de alianza propones?`,
+        modal: false
+    },
+    reporte: {
+        emoji: '⚠️', label: 'Reportes',
+        descripcion: '¿Necesitas reportar algo o a alguien?',
+        nombreCanal: (num, slug) => `⚠️・reporte-${num}-${slug}`,
+        color: '#ED4245',
+        bienvenida: (u) =>
+            `### ⚠️  Ticket de Reporte\n` +
             `${EX.flecha} ¡Hola, **${u}**! Recibimos tu reporte.\n` +
             `${E.arrow} El staff lo revisará con seriedad.\n\n` +
             `**${EX.document} Necesitamos:**\n` +
@@ -577,11 +608,12 @@ const CATEGORIAS = {
         modal: false
     },
     otros: {
-        emoji: '🔔', label: 'Otros',
-        descripcion: '¿Tienes alguna otra consulta para nosotros?',
-        prefijo: 'otros', color: '#95A5A6',
+        emoji: '🔔', label: 'Otro',
+        descripcion: 'Otra consulta que no encaja en las opciones anteriores.',
+        nombreCanal: (num, slug) => `🔔・otros-${num}-${slug}`,
+        color: '#95A5A6',
         bienvenida: (u) =>
-            `### ${EX.alert}  Ticket General\n` +
+            `### 🔔  Ticket General\n` +
             `${EX.flecha} ¡Hola, **${u}**! Abriste un ticket general.\n` +
             `${E.arrow} Un miembro del staff te atenderá en breve.\n\n` +
             `**${EX.document} Cuéntanos:**\n` +
@@ -594,31 +626,54 @@ function contarTicketsPorCategoria(tickets, categoriaKey) {
     return tickets.filter(t => t.categoria === categoriaKey).length;
 }
 
-// ─── Panel de tickets ─────────────────────────────────────────────────────────
+// ─── Panel de tickets (estilo imagen referencia) ──────────────────────────────
 function buildPanelEmbed(guildName, imageUrl = null) {
     return new EmbedBuilder().setColor('#5865F2')
         .setTitle(`${E.ticket}  ¿En qué podemos ayudarte?`)
         .setDescription(
-            `${EX.flecha} Selecciona la opción que mejor se ajuste a tu necesidad.\n\n` +
-            `${EX.carrito}  **Comprar**\n${E.arrow} ¿Estás interesado en adquirir nuestros productos?\n\n` +
-            `🎧  **Soporte**\n${E.arrow} ¿Tienes alguna duda o inconveniente?\n\n` +
-            `${EX.warning}  **Reporte**\n${E.arrow} ¿Necesitas reportar algo o a alguien?\n\n` +
-            `${EX.alert}  **Otros**\n${E.arrow} ¿Tienes alguna otra consulta?`
+            `${EX.flecha} Selecciona la opción que se ajuste a tu necesidad.\n\n` +
+            `🛒  **Comprar**\n${E.arrow} ¿Estás interesado en adquirir nuestros productos o servicios?\n\n` +
+            `🎧  **Dudas o Problemas**\n${E.arrow} ¿Tienes alguna pregunta o inconveniente que necesite atención?\n\n` +
+            `🤝  **Alianzas**\n${E.arrow} ¿Quieres proponer una colaboración o formar parte de algo juntos?\n\n` +
+            `⚠️  **Reportes**\n${E.arrow} ¿Necesitas reportar algo o a alguien?\n\n` +
+            `🔔  **Otro**\n${E.arrow} Otra consulta que no encaja en las opciones anteriores.`
         )
         .setImage(imageUrl ?? BANNER_URL)
-        .setFooter({ text: `${guildName} · ${EX.bluestar} Bot` })
+        .setFooter({ text: `${guildName} · Bot` })
         .setTimestamp();
 }
+
 function buildPanelRow() {
     return new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
             .setCustomId('ticket_categoria')
             .setPlaceholder(`${E.arrow}  Selecciona una opción...`)
             .addOptions(
-                new StringSelectMenuOptionBuilder().setLabel('Comprar').setDescription('¿Estás interesado en adquirir nuestros productos?').setEmoji('🛒').setValue('comprar'),
-                new StringSelectMenuOptionBuilder().setLabel('Soporte').setDescription('¿Tienes alguna duda, problema o inconveniente?').setEmoji('🎧').setValue('soporte'),
-                new StringSelectMenuOptionBuilder().setLabel('Reporte').setDescription('¿Necesitas reportar algo o a alguien?').setEmoji('⚠️').setValue('reporte'),
-                new StringSelectMenuOptionBuilder().setLabel('Otros').setDescription('¿Tienes alguna otra consulta para nosotros?').setEmoji('🔔').setValue('otros')
+                new StringSelectMenuOptionBuilder()
+                    .setLabel('Comprar')
+                    .setDescription('¿Estás interesado en adquirir nuestros productos o servicios?')
+                    .setEmoji('🛒')
+                    .setValue('comprar'),
+                new StringSelectMenuOptionBuilder()
+                    .setLabel('Dudas o Problemas')
+                    .setDescription('¿Tienes alguna pregunta o inconveniente que necesite atención?')
+                    .setEmoji('🎧')
+                    .setValue('soporte'),
+                new StringSelectMenuOptionBuilder()
+                    .setLabel('Alianzas')
+                    .setDescription('¿Quieres proponer una colaboración o formar parte de algo?')
+                    .setEmoji('🤝')
+                    .setValue('alianzas'),
+                new StringSelectMenuOptionBuilder()
+                    .setLabel('Reportes')
+                    .setDescription('¿Necesitas reportar algo o a alguien?')
+                    .setEmoji('⚠️')
+                    .setValue('reporte'),
+                new StringSelectMenuOptionBuilder()
+                    .setLabel('Otro')
+                    .setDescription('Otra consulta que no encaja en las opciones anteriores.')
+                    .setEmoji('🔔')
+                    .setValue('otros')
             )
     );
 }
@@ -636,7 +691,8 @@ async function logTicket(guild, tdata, embedLog, archivo = null) {
 // ─── Ticket Setup ─────────────────────────────────────────────────────────────
 async function handleTicketSetup(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
-        return safeReply(interaction, { content: `${EX.warning} Solo administradores.` });
+        return safeReply(interaction, { content: `${EX.warning} Solo administradores pueden usar este comando.` });
+
     const ok = await safeDefer(interaction, true);
     if (!ok) return;
 
@@ -667,25 +723,33 @@ async function handleTicketSetup(interaction) {
                     if (canalAnterior.id === canal.id) {
                         await mensajeAnterior.edit({ embeds: [embedPanel], components: [rowPanel] });
                         panelActualizado = true;
-                    } else { await mensajeAnterior.delete().catch(() => {}); }
+                    } else {
+                        await mensajeAnterior.delete().catch(() => {});
+                    }
                 }
             }
         } catch { panelActualizado = false; }
     }
+
     if (!panelActualizado) {
         const msg = await canal.send({ embeds: [embedPanel], components: [rowPanel] }).catch(() => null);
-        if (msg) { tdata.config.panelMessageId = msg.id; tdata.config.panelChannelId = canal.id; }
+        if (msg) {
+            tdata.config.panelMessageId = msg.id;
+            tdata.config.panelChannelId = canal.id;
+        }
     }
     saveTickets(interaction.guild.id, tdata);
 
-    return interaction.editReply({ content: [
+    const lineas = [
         `${E.check} Panel ${panelActualizado ? 'actualizado' : `enviado a <#${canal.id}>`}`,
         categoriaDiscord ? `${EX.document} Categoría: **${categoriaDiscord.name}**` : '',
-        logCanal         ? `${E.scroll} Logs: <#${logCanal.id}>` : '',
-        vendedorRol      ? `${EX.nochee} Rol vendedor: <@&${vendedorRol.id}>` : '',
-        staffRol         ? `${E.escudo} Rol staff: <@&${staffRol.id}>` : '',
-        imagenUrl        ? `🖼️ Imagen actualizada` : ''
-    ].filter(Boolean).join('\n') });
+        logCanal         ? `${E.scroll} Logs: <#${logCanal.id}>`                  : '',
+        vendedorRol      ? `${EX.nochee} Rol vendedor: **${vendedorRol.name}**`    : '',
+        staffRol         ? `${E.escudo} Rol staff: **${staffRol.name}**`           : '',
+        imagenUrl        ? `🖼️ Imagen del banner actualizada`                      : ''
+    ].filter(Boolean).join('\n');
+
+    return interaction.editReply({ content: lineas });
 }
 
 // ─── Botones dentro del ticket ────────────────────────────────────────────────
@@ -718,16 +782,19 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
     try {
         const tdata = loadTickets(guild.id);
 
+        // Verificar ticket ya abierto
         const ticketAbierto = tdata.tickets.find(t => t.userId === user.id && t.estado === 'abierto');
         if (ticketAbierto) {
             const existe = await guild.channels.fetch(ticketAbierto.channelId).catch(() => null);
             if (existe) return safeReply(interaction, { content: `${EX.warning} Ya tienes un ticket abierto: <#${ticketAbierto.channelId}>` });
-            ticketAbierto.estado = 'cerrado';
+            // Canal eliminado manualmente — limpiar
+            ticketAbierto.estado    = 'cerrado';
             ticketAbierto.cerradoPor = 'Sistema (canal eliminado)';
-            ticketAbierto.cerradoAt = Date.now();
+            ticketAbierto.cerradoAt  = Date.now();
             saveTickets(guild.id, tdata);
         }
 
+        // Verificar cooldown
         const ultimoTicket = tdata.cooldowns[user.id] ?? 0;
         const restante = TICKET_COOLDOWN_MS - (Date.now() - ultimoTicket);
         if (restante > 0 && ultimoTicket > 0)
@@ -736,10 +803,12 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
         if (!guild.members.me.permissions.has(PermissionFlagsBits.ManageChannels))
             return safeReply(interaction, { content: `${EX.warning} **Faltan permisos.** El bot necesita **Gestionar canales**.` });
 
+        // ─── Nombre del canal con emoji unicode ───────────────────────────
         const numCat   = contarTicketsPorCategoria(tdata.tickets, categoriaKey) + 1;
         const userSlug = user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 15) || 'usuario';
-        const nombreCanal = `${cat.prefijo}-${numCat}-${userSlug}`;
+        const nombreCanal = cat.nombreCanal(numCat, userSlug);
 
+        // Permisos del canal
         const permisos = [
             { id: guild.id,            deny:  [PermissionFlagsBits.ViewChannel] },
             { id: user.id,             allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
@@ -815,7 +884,9 @@ async function abrirTicket(interaction, categoriaKey, datosModal = null) {
             ).setTimestamp());
 
         return safeReply(interaction, { content: `${E.check} Tu ticket fue creado: <#${canalTicket.id}>` });
-    } finally { ticketLocks.delete(lockKey); }
+    } finally {
+        ticketLocks.delete(lockKey);
+    }
 }
 
 // ─── Reclamar ticket ──────────────────────────────────────────────────────────
@@ -827,14 +898,12 @@ async function reclamarTicket(interaction, ticketId) {
     if (!ticket || ticket.estado === 'cerrado')
         return safeReply(interaction, { content: `${EX.warning} Este ticket ya fue cerrado.` });
 
-    // Solo staff o admin pueden reclamar — el dueño del ticket NO puede
     const esStaff = tdata.config.staffRoleId ? interaction.member.roles.cache.has(tdata.config.staffRoleId) : false;
     const esAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
 
     if (!esStaff && !esAdmin)
         return safeReply(interaction, { content: `${E.escudo} Solo el staff puede reclamar tickets.` });
 
-    // El dueño del ticket no puede reclamar aunque sea staff/admin
     if (interaction.user.id === ticket.userId)
         return safeReply(interaction, { content: `${EX.warning} No puedes reclamar tu propio ticket.` });
 
@@ -844,12 +913,11 @@ async function reclamarTicket(interaction, ticketId) {
     if (ticket.reclamadoPor === interaction.user.id)
         return safeReply(interaction, { content: `${EX.nochee} Tú ya tienes este ticket reclamado.` });
 
-    ticket.reclamadoPor  = interaction.user.id;
-    ticket.reclamadoTag  = interaction.user.tag;
-    ticket.reclamadoAt   = Date.now();
+    ticket.reclamadoPor = interaction.user.id;
+    ticket.reclamadoTag = interaction.user.tag;
+    ticket.reclamadoAt  = Date.now();
     saveTickets(guild.id, tdata);
 
-    // Quitar visibilidad al resto del staff, dar acceso individual al que reclama
     try {
         const canal = interaction.channel;
         if (tdata.config.staffRoleId) {
@@ -866,9 +934,8 @@ async function reclamarTicket(interaction, ticketId) {
             `${E.arrow} ${E.escudo} **Atendido por:** <@${interaction.user.id}>\n` +
             `${E.arrow} ${E.person} **Cliente:** <@${ticket.userId}>\n\n` +
             `${E.line} *Los demás staff ya no pueden ver este ticket.*`
-        ).setFooter({ text: `${EX.bluestar} Bot • ${today()}` }).setTimestamp();
+        ).setFooter({ text: `Bot • ${today()}` }).setTimestamp();
 
-    // Actualizar el botón de reclamar a deshabilitado
     await interaction.message.edit({ components: [buildTicketRow(ticketId, true)] }).catch(() => {});
     await interaction.channel.send({ embeds: [embedReclamado] }).catch(() => {});
     await safeReply(interaction, { content: `${E.check} Ticket reclamado correctamente.` });
@@ -896,7 +963,6 @@ async function cerrarTicketConfirm(interaction, ticketId) {
     if (!esAdmin && !esStaff && !esReclamador && !esDueno)
         return safeReply(interaction, { content: '🚫 Sin permiso para cerrar este ticket.' });
 
-    // Mostrar embed de confirmación con botones Cerrar / Reabrir / Cancelar
     const embedConfirm = new EmbedBuilder().setColor('#ED4245')
         .setTitle(`${E.lock}  ¿Cerrar este ticket?`)
         .setDescription(
@@ -928,7 +994,7 @@ async function ejecutarCierreTicket(interaction, ticketId) {
     const ok = await safeDefer(interaction);
     if (!ok) return;
 
-    // Transcript completo
+    // Recopilar transcript
     let todosLosMensajes = [];
     let before;
     while (true) {
@@ -971,14 +1037,17 @@ async function ejecutarCierreTicket(interaction, ticketId) {
     ticket.cerradoAt  = closedAt;
     saveTickets(guild.id, tdata);
 
-    await interaction.editReply({ embeds: [new EmbedBuilder().setColor('#ED4245')
-        .setTitle(`${E.lock}  Ticket cerrado`)
-        .setDescription(
-            `${E.arrow} Cerrado por <@${interaction.user.id}>\n` +
-            `${E.arrow} El canal se eliminará en **5 segundos**.`
-        ).setTimestamp()], components: [] }).catch(() => {});
+    await interaction.editReply({
+        embeds: [new EmbedBuilder().setColor('#ED4245')
+            .setTitle(`${E.lock}  Ticket cerrado`)
+            .setDescription(
+                `${E.arrow} Cerrado por <@${interaction.user.id}>\n` +
+                `${E.arrow} El canal se eliminará en **5 segundos**.`
+            ).setTimestamp()],
+        components: []
+    }).catch(() => {});
 
-    // DM al usuario — solo una vez
+    // DM al usuario
     try {
         const gdata   = loadData(guild.id);
         const dmTexto = gdata.config.dmCierreTexto
@@ -998,8 +1067,7 @@ async function ejecutarCierreTicket(interaction, ticketId) {
                     `${E.arrow} **Duración:** \`${duracion}\`\n\n` +
                     `━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     dmTexto.replace('{usuario}', ticket.userTag.split('#')[0]).replace('{servidor}', guild.name)
-                ).setFooter({ text: `${guild.name} · ${EX.bluestar} Bot` }).setTimestamp();
-            // Una sola llamada a enviarDM
+                ).setFooter({ text: `${guild.name} · Bot` }).setTimestamp();
             await enviarDM(miembro.user, embedDM, { files: [{ attachment: buffer, name: `transcript-ticket${ticketId}.txt` }] });
         }
     } catch (e) { console.warn('⚠️ DM cierre fallido:', e?.message); }
@@ -1017,6 +1085,7 @@ async function ejecutarCierreTicket(interaction, ticketId) {
             ).setTimestamp(),
         { attachment: bufferLog, name: `transcript-ticket${ticketId}.txt` }
     );
+
     setTimeout(() => { interaction.channel.delete().catch(() => {}); }, 5000);
 }
 
@@ -1034,20 +1103,17 @@ async function reabrirTicket(interaction, ticketId) {
     if (!esAdmin && !esStaff)
         return safeReply(interaction, { content: '🚫 Solo el staff puede reabrir tickets.' });
 
-    // Restaurar permisos del staff al canal
     try {
         if (tdata.config.staffRoleId) {
             await interaction.channel.permissionOverwrites.edit(tdata.config.staffRoleId, {
                 ViewChannel: true, SendMessages: true, ReadMessageHistory: true
             }).catch(() => {});
         }
-        // Si había sido reclamado, quitar restricciones individuales
         if (ticket.reclamadoPor) {
             await interaction.channel.permissionOverwrites.delete(ticket.reclamadoPor).catch(() => {});
         }
     } catch { }
 
-    // Limpiar estado de reclamado
     ticket.reclamadoPor = null;
     ticket.reclamadoTag = null;
     ticket.reclamadoAt  = null;
@@ -1076,18 +1142,29 @@ async function handleTicketInteraction(interaction) {
         const categoriaKey = interaction.values[0];
         const cat = CATEGORIAS[categoriaKey];
         if (!cat) return safeReply(interaction, { content: `${EX.warning} Categoría no válida.` });
+
         if (cat.modal) {
             const modal = new ModalBuilder()
                 .setCustomId(`ticket_modal_${categoriaKey}`)
                 .setTitle(`Ticket — ${cat.label}`);
             modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('cantidad').setLabel('¿Qué deseas adquirir?').setPlaceholder('Ej: Plan Premium, acceso vip').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('precio').setLabel('¿Cuál es tu presupuesto?').setPlaceholder('Ej: $5 USD, 130 MXN').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('metodo').setLabel('¿Método de pago?').setPlaceholder('Ej: PayPal, Binance, Mercado Pago').setStyle(TextInputStyle.Short).setRequired(true))
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('cantidad').setLabel('¿Qué deseas adquirir?')
+                        .setPlaceholder('Ej: Plan Premium, acceso vip').setStyle(TextInputStyle.Short).setRequired(true)
+                ),
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('precio').setLabel('¿Cuál es tu presupuesto?')
+                        .setPlaceholder('Ej: $5 USD, 130 MXN').setStyle(TextInputStyle.Short).setRequired(true)
+                ),
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('metodo').setLabel('¿Método de pago?')
+                        .setPlaceholder('Ej: PayPal, Binance, Mercado Pago').setStyle(TextInputStyle.Short).setRequired(true)
+                )
             );
             await interaction.showModal(modal).catch(e => { if (!isIgnorableError(e)) console.warn('⚠️ showModal:', e?.message); });
             return;
         }
+
         const ok = await safeDefer(interaction, true);
         if (!ok) return;
         return abrirTicket(interaction, categoriaKey);
@@ -1163,7 +1240,7 @@ function buildSorteoEmbed(sorteo, guildName) {
                 : terminado ? `\n\n${E.arrow} *Sin participantes.*` : '')
         )
         .setImage(sorteo.imagen ?? BANNER_URL)
-        .setFooter({ text: `${guildName} · ${EX.bluestar} Bot · ID: ${sorteo.id}` })
+        .setFooter({ text: `${guildName} · Bot · ID: ${sorteo.id}` })
         .setTimestamp();
 }
 function buildSorteoRow(sorteoId, disabled = false) {
@@ -1227,7 +1304,8 @@ async function handleSorteoFinalizar(interaction, sorteoId) {
     if (interaction.user.id !== sorteo.hostId && !esAdmin)
         return safeReply(interaction, { content: `🚫 Solo el host (<@${sorteo.hostId}>) o un administrador puede finalizar este sorteo.` });
 
-    sorteo.estado    = 'finalizado'; sorteo.fin = Date.now();
+    sorteo.estado    = 'finalizado';
+    sorteo.fin       = Date.now();
     sorteo.ganadores = elegirGanadores(sorteo.participantes ?? [], sorteo.cantGanadores);
     saveData(interaction.guild.id, data);
 
@@ -1264,7 +1342,9 @@ async function verificarSorteos() {
                         }
                         if (sorteo.ganadores.length > 0) {
                             await canal.send({ content: `🎉 **¡El sorteo terminó!** ${sorteo.ganadores.map(id => `<@${id}>`).join(', ')}\n${E.arrow} ¡Ganaste **${sorteo.premio}**! 🎁` }).catch(() => {});
-                        } else { await canal.send({ content: '😔 El sorteo terminó sin participantes.' }).catch(() => {}); }
+                        } else {
+                            await canal.send({ content: '😔 El sorteo terminó sin participantes.' }).catch(() => {});
+                        }
                     }
                 } catch (e) { console.warn(`⚠️ verificarSorteos [${guild.name}]:`, e?.message); }
             }
@@ -1345,7 +1425,7 @@ async function handleReroll(message, sorteoId) {
             `${E.arrow} ${EX.bluecrown} **Nuevo${sorteo.ganadores.length > 1 ? 's ganadores' : ' ganador'}:**\n` +
             sorteo.ganadores.map(id => `${E.line} <@${id}>`).join('\n') +
             `\n\n${E.line} *Reroll por <@${message.author.id}>*`
-        ).setFooter({ text: `${EX.bluestar} Bot · ID: ${sorteoId}` }).setTimestamp();
+        ).setFooter({ text: `Bot · ID: ${sorteoId}` }).setTimestamp();
 
     await message.channel.send({
         content: sorteo.ganadores.length > 0
@@ -1359,12 +1439,15 @@ async function handleReroll(message, sorteoId) {
 async function handleNotificar(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
         return safeReply(interaction, { content: '🚫 Solo administradores.' });
+
     const mensaje     = interaction.options.getString('mensaje');
     const titulo      = interaction.options.getString('titulo') ?? `${EX.gifr}  Mensaje del servidor`;
     const soloActivos = interaction.options.getBoolean('solo_activos') ?? false;
     const imagenUrl   = interaction.options.getString('imagen') ?? null;
-    const ok          = await safeDefer(interaction, true);
+
+    const ok = await safeDefer(interaction, true);
     if (!ok) return;
+
     const data        = loadData(interaction.guild.id);
     let clienteIds    = Object.keys(data.analytics?.porCliente ?? {});
     if (soloActivos) {
@@ -1373,12 +1456,13 @@ async function handleNotificar(interaction) {
         clienteIds = clienteIds.filter(id => activos.has(id));
     }
     if (clienteIds.length === 0) return interaction.editReply({ content: '📭 No hay clientes registrados.' });
+
     const embedNotif = new EmbedBuilder().setColor('#5865F2')
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
         .setTitle(titulo)
         .setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
         .setDescription(`${mensaje}\n\n━━━━━━━━━━━━━━━━━━━━━━━━\n*Mensaje oficial de **${interaction.guild.name}**.*`)
-        .setFooter({ text: `${interaction.guild.name} · ${EX.bluestar} Bot` }).setTimestamp();
+        .setFooter({ text: `${interaction.guild.name} · Bot` }).setTimestamp();
     if (imagenUrl) { try { new URL(imagenUrl); embedNotif.setImage(imagenUrl); } catch {} }
 
     let enviados = 0, fallidos = 0;
@@ -1393,6 +1477,7 @@ async function handleNotificar(interaction) {
         }));
         if (i + 2 < clienteIds.length) await new Promise(r => setTimeout(r, 2000));
     }
+
     return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#57F287')
         .setTitle(`${E.bot}  Notificación enviada`)
         .setDescription(
@@ -1409,6 +1494,7 @@ async function handleFactura(interaction) {
     const venta   = data.ventas.find(v => v.id === ordenId);
     if (!venta)                       return safeReply(interaction, { content: `${EX.warning} No existe la orden \`#${ordenId}\`.` });
     if (venta.estado === 'cancelada') return safeReply(interaction, { content: `${EX.warning} La orden \`#${ordenId}\` fue cancelada.` });
+
     const esAdmin = interaction.member.permissions.has(PermissionFlagsBits.ManageMessages);
     if (interaction.user.id !== venta.clienteId && !esAdmin)
         return safeReply(interaction, { content: '🚫 Solo el cliente o un administrador puede solicitar la factura.' });
@@ -1434,17 +1520,21 @@ async function handleFactura(interaction) {
             `**${E.hand} Operador**\n${E.arrow} <@${venta.vendedorId}> — \`${venta.vendedorTag}\`\n\n` +
             (resena ? `**${E.review} Reseña**\n${E.arrow} ${estrellas(resena.estrellas)} \`${resena.estrellas}/5\`${resena.comentario ? ` — *"${resena.comentario}"*` : ''}\n\n` : '') +
             `━━━━━━━━━━━━━━━━━━━━━━━━\n*Guarda este comprobante para consultas futuras.*`
-        ).setImage(BANNER_URL).setFooter({ text: `${interaction.guild.name} · ${EX.bluestar} Bot · ${today()}` }).setTimestamp(venta.timestamp);
+        ).setImage(BANNER_URL).setFooter({ text: `${interaction.guild.name} · Bot · ${today()}` }).setTimestamp(venta.timestamp);
 
     const clienteUser = await interaction.client.users.fetch(venta.clienteId).catch(() => null);
     if (!clienteUser) return safeReply(interaction, { content: `${EX.warning} No se encontró al usuario cliente.` });
     const sent = await enviarDM(clienteUser, embedFactura);
-    return safeReply(interaction, { content: sent ? `${E.check} Factura enviada por DM a <@${venta.clienteId}>.` : `${EX.warning} No se pudo enviar el DM. Tiene los DMs desactivados.` });
+    return safeReply(interaction, {
+        content: sent
+            ? `${E.check} Factura enviada por DM a <@${venta.clienteId}>.`
+            : `${EX.warning} No se pudo enviar el DM. El usuario tiene los DMs desactivados.`
+    });
 }
 
 // ─── Servidor stats ───────────────────────────────────────────────────────────
 async function handleServidorStats(interaction) {
-    const ok    = await safeDefer(interaction);
+    const ok = await safeDefer(interaction);
     if (!ok) return;
     const data  = loadData(interaction.guild.id);
     const tdata = loadTickets(interaction.guild.id);
@@ -1460,6 +1550,7 @@ async function handleServidorStats(interaction) {
     for (const [, c] of Object.entries(data.analytics.porCliente ?? {})) {
         const t = getTier(c.compras ?? 0, data.config.tierUmbrales); if (t) tierConteo[t.nombre]++;
     }
+
     return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#5865F2')
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
         .setTitle(`${E.analytics}  Estadísticas del Servidor`)
@@ -1480,7 +1571,7 @@ async function handleServidorStats(interaction) {
             `**${EX.bluecrown} Destacados**\n` +
             `${E.arrow} ${E.corona} **Top operador:** ${topV ? `<@${topV[0]}> (\`${topV[1].ventas}\` pedidos)` : '`Sin datos`'}\n` +
             `${E.arrow} ${EX.carrito} **Top cliente:** ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}`
-        ).setImage(BANNER_URL).setFooter({ text: `${EX.bluestar} Bot · ${today()}` }).setTimestamp()] });
+        ).setImage(BANNER_URL).setFooter({ text: `Bot · ${today()}` }).setTimestamp()] });
 }
 
 // ─── Club VIP ─────────────────────────────────────────────────────────────────
@@ -1502,6 +1593,10 @@ async function handleClubVip(interaction) {
     const expira   = Date.now() + durMs;
     const expiraTs = Math.floor(expira / 1000);
 
+    // ─── FIX: obtener nombre del rol para usarlo en DMs (las menciones <@&ID> no funcionan en DMs) ───
+    const rolObj    = interaction.guild.roles.cache.get(vipRoleId) ?? await interaction.guild.roles.fetch(vipRoleId).catch(() => null);
+    const rolNombre = rolObj?.name ?? 'VIP';
+
     // Asignar rol
     try {
         const miembro = await interaction.guild.members.fetch(cliente.id).catch(() => null);
@@ -1513,6 +1608,7 @@ async function handleClubVip(interaction) {
     if (!data.vipMembers) data.vipMembers = {};
     data.vipMembers[cliente.id] = {
         roleId:      vipRoleId,
+        roleName:    rolNombre,
         expira,
         asignadoPor: interaction.user.id,
         asignadoTag: interaction.user.tag,
@@ -1521,6 +1617,7 @@ async function handleClubVip(interaction) {
     };
     saveData(interaction.guild.id, data);
 
+    // Embed de confirmación en el servidor (aquí SÍ se puede usar mención de rol)
     const embedConfirmacion = new EmbedBuilder().setColor('#FEE75C')
         .setTitle(`${EX.bluecrown}  Club VIP activado`)
         .setDescription(
@@ -1529,25 +1626,24 @@ async function handleClubVip(interaction) {
             `${E.arrow} ⏳ **Duración:** \`${formatDuracion(durStr)}\`\n` +
             `${E.arrow} 📅 **Expira:** <t:${expiraTs}:F>\n` +
             `${E.arrow} ${E.hand} **Asignado por:** <@${interaction.user.id}>`
-        ).setFooter({ text: `${EX.bluestar} Bot · ${today()}` }).setTimestamp();
+        ).setFooter({ text: `Bot · ${today()}` }).setTimestamp();
 
-    // DM al cliente — una sola vez
+    // DM al cliente — usando nombre del rol en texto, no mención
     const dmEmbed = new EmbedBuilder().setColor('#FEE75C')
         .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) ?? undefined })
         .setTitle(`${EX.bluecrown}  ¡Bienvenido al Club VIP!`)
         .setThumbnail(interaction.guild.iconURL({ dynamic: true }) ?? null)
         .setDescription(
             `¡Hola, **${cliente.username}**! 🎉 Tu membresía VIP ha sido activada.\n\n` +
-            `${E.arrow} ${EX.bluecrown} **Rol:** <@&${vipRoleId}>\n` +
+            `${E.arrow} ${EX.bluecrown} **Rol asignado:** \`${rolNombre}\`\n` +
             `${E.arrow} ⏳ **Válido por:** \`${formatDuracion(durStr)}\`\n` +
             `${E.arrow} 📅 **Expira:** <t:${expiraTs}:F>\n\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `*Disfruta tus beneficios exclusivos.*`
-        ).setFooter({ text: `${interaction.guild.name} · ${EX.bluestar} Bot` }).setTimestamp();
+            `*Disfruta tus beneficios exclusivos en **${interaction.guild.name}**.*`
+        ).setFooter({ text: `${interaction.guild.name} · Bot` }).setTimestamp();
 
     await enviarDM(cliente, dmEmbed);
 
-    // Responder al comando con el embed de confirmación (una sola vez)
     return safeReply(interaction, { embeds: [embedConfirmacion] });
 }
 
@@ -1568,15 +1664,17 @@ async function verificarVipExpirados() {
 
                     const user = await client.users.fetch(userId).catch(() => null);
                     if (user) {
+                        // DM de expiración — usando nombre guardado del rol
+                        const rolNombre = vipInfo.roleName ?? 'VIP';
                         const embedExpira = new EmbedBuilder().setColor('#ED4245')
                             .setAuthor({ name: guild.name, iconURL: guild.iconURL({ dynamic: true }) ?? undefined })
                             .setTitle(`${EX.warning}  Tu membresía VIP ha expirado`)
                             .setDescription(
                                 `¡Hola, **${user.username}**!\n\n` +
-                                `${E.arrow} Tu membresía **Club VIP** en **${guild.name}** ha llegado a su fin.\n\n` +
+                                `${E.arrow} Tu membresía **${rolNombre}** en **${guild.name}** ha llegado a su fin.\n\n` +
                                 `${EX.flecha} ¿Deseas renovarla?\n` +
                                 `${E.arrow} Abre un ticket de compra para continuar disfrutando de tus beneficios. 💙`
-                            ).setFooter({ text: `${guild.name} · ${EX.bluestar} Bot` }).setTimestamp();
+                            ).setFooter({ text: `${guild.name} · Bot` }).setTimestamp();
                         await enviarDM(user, embedExpira);
                     }
                 } catch (e) { console.warn(`⚠️ VIP expirado [${userId}]:`, e?.message); }
@@ -1615,7 +1713,8 @@ async function verificarRecordatorios() {
                                     `${E.arrow} ⏱️ **Sin respuesta:** \`${tiempoRelativo(ahora - ultimaActividad)}\``
                                 ).setTimestamp()]
                         }).catch(() => {});
-                        ticket.recordatorioEnviado = true; guardado = true;
+                        ticket.recordatorioEnviado = true;
+                        guardado = true;
                     } catch (err) { console.warn(`⚠️ Recordatorio ticket #${ticket.id}:`, err?.message); }
                 }
             }
@@ -1691,15 +1790,12 @@ client.once('clientReady', () => {
 
 // ─── messageCreate ────────────────────────────────────────────────────────────
 client.on('messageCreate', async (message) => {
+    // Filtros base — bots, fuera de servidor, @everyone/@here
     if (message.author.bot || !message.guild) return;
     if (ALLOWED_GUILDS.length > 0 && !ALLOWED_GUILDS.includes(message.guild.id)) return;
-
-    // Ignorar @everyone y @here — no responder ni registrar actividad
     if (message.mentions.everyone) return;
 
-    actualizarActividadTicket(message.guild.id, message.channel.id);
-
-    // ── Prefijo de texto ──────────────────────────────────────────────────
+    // ── Prefijo de texto — procesado ANTES de cualquier otra lógica ──────
     if (message.content.startsWith(PREFIX)) {
         const espera = checkCooldown(message.guild.id, message.author.id, 'prefix', 3);
         if (espera > 0) return;
@@ -1712,14 +1808,19 @@ client.on('messageCreate', async (message) => {
             if (!sorteoId) return message.reply(`${EX.warning} Uso: \`${PREFIX}reroll <id_del_sorteo>\``).catch(() => {});
             return handleReroll(message, sorteoId);
         }
+        // Comando de prefix procesado — no continuar con lógica AFK/tickets
         return;
     }
+
+    // ── Actualizar actividad del ticket (solo mensajes normales) ──────────
+    actualizarActividadTicket(message.guild.id, message.channel.id);
 
     // ── AFK ───────────────────────────────────────────────────────────────
     try {
         const data  = loadData(message.guild.id);
         const ahora = Date.now();
 
+        // Limpiar AFK expirados
         let limpiado = false;
         for (const [uid] of Object.entries(data.afk ?? {})) {
             if (ahora - data.afk[uid].tiempo > AFK_TIMEOUT_MS) { delete data.afk[uid]; limpiado = true; }
@@ -1752,7 +1853,7 @@ client.on('messageCreate', async (message) => {
                 desc += `\n${E.line} *Nadie te mencionó.*`;
             }
 
-            await message.reply({ embeds: [new EmbedBuilder().setColor('#57F287').setDescription(desc).setFooter({ text: `${EX.bluestar} Bot • AFK finalizado` }).setTimestamp()] }).catch(() => {});
+            await message.reply({ embeds: [new EmbedBuilder().setColor('#57F287').setDescription(desc).setFooter({ text: `Bot • AFK finalizado` }).setTimestamp()] }).catch(() => {});
             return;
         }
 
@@ -1775,12 +1876,12 @@ client.on('messageCreate', async (message) => {
                     .setDescription(
                         `${E.arrow} 💤 **${usuario.username}** está AFK hace **${durAFK}**\n` +
                         `${E.line} Motivo: *${afkInfo.motivo}*`
-                    ).setFooter({ text: `${EX.bluestar} Bot • AFK` }).setTimestamp()] }).catch(() => {});
+                    ).setFooter({ text: `Bot • AFK` }).setTimestamp()] }).catch(() => {});
             }
             if (modificado) saveData(message.guild.id, data);
         }
 
-        // Mención al bot (no @everyone, ya filtrado arriba)
+        // Mención directa al bot
         if (message.mentions.has(client.user) && !message.mentions.everyone) {
             await message.reply({ embeds: [new EmbedBuilder().setColor('#5865F2')
                 .setDescription(`### ${E.bot}  ¡Hola!\n\n${E.arrow} Usa \`/help\` para ver mis comandos.\n${E.arrow} Prefijo de texto: \`${PREFIX}\``)] }).catch(() => {});
@@ -1805,13 +1906,18 @@ client.on('interactionCreate', async (interaction) => {
                 interaction.customId.startsWith('ticket_reabrir_')        ||
                 interaction.customId.startsWith('ticket_cancelar_cierre_')
             ))
-        ) return safeHandle(interaction, () => handleTicketInteraction(interaction));
+        ) {
+            // return explícito — evita que el flujo caiga en el bloque de slash commands
+            return safeHandle(interaction, () => handleTicketInteraction(interaction));
+        }
 
         // ── Sorteos ───────────────────────────────────────────────────────
-        if (interaction.isButton() && interaction.customId.startsWith('sorteo_participar_'))
+        if (interaction.isButton() && interaction.customId.startsWith('sorteo_participar_')) {
             return safeHandle(interaction, () => handleSorteoParticipar(interaction, interaction.customId.replace('sorteo_participar_', '')));
-        if (interaction.isButton() && interaction.customId.startsWith('sorteo_finalizar_'))
+        }
+        if (interaction.isButton() && interaction.customId.startsWith('sorteo_finalizar_')) {
             return safeHandle(interaction, () => handleSorteoFinalizar(interaction, interaction.customId.replace('sorteo_finalizar_', '')));
+        }
 
         // ── Help ──────────────────────────────────────────────────────────
         if (interaction.isButton() && interaction.customId.startsWith('help_')) {
@@ -1853,8 +1959,9 @@ client.on('interactionCreate', async (interaction) => {
                     ).setTimestamp()], components: [] });
             });
         }
-        if (interaction.isButton() && interaction.customId.startsWith('cancelar_abort_'))
+        if (interaction.isButton() && interaction.customId.startsWith('cancelar_abort_')) {
             return interaction.update({ content: `${E.check} Cancelación abortada.`, embeds: [], components: [] }).catch(() => {});
+        }
 
         // ── Reseña (botón) ────────────────────────────────────────────────
         if (interaction.isButton() && interaction.customId.startsWith('reseña_')) {
@@ -1885,7 +1992,11 @@ client.on('interactionCreate', async (interaction) => {
                 let imagenValida = null;
                 if (imagenUrl) { try { new URL(imagenUrl); imagenValida = imagenUrl; } catch { } }
                 if (!data.resenas) data.resenas = [];
-                data.resenas.push({ ordenId, clienteId: venta.clienteId, clienteTag: venta.clienteTag, vendedorId: venta.vendedorId, estrellas: numEstrellas, comentario, imagen: imagenValida, timestamp: Date.now() });
+                data.resenas.push({
+                    ordenId, clienteId: venta.clienteId, clienteTag: venta.clienteTag,
+                    vendedorId: venta.vendedorId, estrellas: numEstrellas,
+                    comentario, imagen: imagenValida, timestamp: Date.now()
+                });
                 saveData(interaction.guild.id, data);
 
                 const embedResena = new EmbedBuilder().setColor('#FEE75C')
@@ -1906,10 +2017,11 @@ client.on('interactionCreate', async (interaction) => {
             });
         }
 
+        // ─── Solo slash commands a partir de aquí ─────────────────────────
         if (!interaction.isChatInputCommand()) return;
 
         // ─── Slash commands ───────────────────────────────────────────────
-        safeHandle(interaction, async () => {
+        return safeHandle(interaction, async () => {
             const data  = loadData(interaction.guild.id);
             const guild = interaction.guild;
             const user  = interaction.user;
@@ -1936,8 +2048,10 @@ client.on('interactionCreate', async (interaction) => {
                 saveData(guild.id, data);
                 return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#FEE75C')
                     .setTitle(`${EX.bluecrown}  Club VIP configurado`)
-                    .setDescription(`${E.arrow} ${EX.bluecrown} **Rol VIP:** <@&${rol.id}>\n${E.line} *Ahora puedes usar \`/clubvip\` para asignar membresías.*`)
-                    .setTimestamp()] });
+                    .setDescription(
+                        `${E.arrow} ${EX.bluecrown} **Rol VIP:** <@&${rol.id}>\n` +
+                        `${E.line} *Ahora puedes usar \`/clubvip\` para asignar membresías.*`
+                    ).setTimestamp()] });
             }
 
             // ── setvip ────────────────────────────────────────────────────
@@ -2251,7 +2365,7 @@ client.on('interactionCreate', async (interaction) => {
                         `${E.arrow} ${EX.bluecrown} **Top operador:** ${topV ? `<@${topV[0]}> (\`${topV[1].ventas}\` pedidos)` : '`Sin datos`'}\n` +
                         `${E.arrow} ${E.corona} **Top cliente:** ${topC ? `<@${topC[0]}> (\`${topC[1].compras}\` compras)` : '`Sin datos`'}` +
                         (prom ? `\n${E.arrow} ${E.review} **Valoración:** \`${prom}/5\` *(${totalR} reseñas)*` : '')
-                    ).setFooter({ text: `${EX.bluestar} Bot` }).setTimestamp()] });
+                    ).setFooter({ text: `Bot` }).setTimestamp()] });
             }
 
             // ── afk ───────────────────────────────────────────────────────
@@ -2275,7 +2389,7 @@ client.on('interactionCreate', async (interaction) => {
                         `${E.arrow} ${E.reloj} **Desde:** <t:${Math.floor(Date.now() / 1000)}:R>\n\n` +
                         `${E.line} *Escribe cualquier mensaje para volver.*`
                     ).setThumbnail(user.displayAvatarURL({ dynamic: true }))
-                    .setFooter({ text: `${EX.bluestar} Bot • AFK` }).setTimestamp()] });
+                    .setFooter({ text: `Bot • AFK` }).setTimestamp()] });
             }
 
             // ── anuncio ───────────────────────────────────────────────────
@@ -2286,7 +2400,7 @@ client.on('interactionCreate', async (interaction) => {
                 const embed = new EmbedBuilder().setColor('#ED4245')
                     .setTitle(`${EX.alert}  ${interaction.options.getString('titulo')}`)
                     .setDescription(interaction.options.getString('mensaje'))
-                    .setFooter({ text: `Anuncio por ${user.tag} · ${EX.bluestar} Bot` }).setTimestamp();
+                    .setFooter({ text: `Anuncio por ${user.tag} · Bot` }).setTimestamp();
                 if (imagenUrl) { try { new URL(imagenUrl); embed.setImage(imagenUrl); } catch {} }
                 const opts = { embeds: [embed] };
                 const textoBoton  = interaction.options.getString('texto_boton');
@@ -2319,25 +2433,29 @@ client.on('interactionCreate', async (interaction) => {
 
             // ── setlog ────────────────────────────────────────────────────
             if (interaction.commandName === 'setlog') {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                    return safeReply(interaction, { content: '🚫 Solo administradores.' });
                 data.config.logChannelId = interaction.options.getChannel('canal').id;
                 saveData(guild.id, data);
                 return safeReply(interaction, { content: `${E.settings} Canal de logs: <#${data.config.logChannelId}>` });
             }
             if (interaction.commandName === 'setresenas') {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                    return safeReply(interaction, { content: '🚫 Solo administradores.' });
                 data.config.resenaChannelId = interaction.options.getChannel('canal').id;
                 saveData(guild.id, data);
                 return safeReply(interaction, { content: `${E.settings} Canal de reseñas: <#${data.config.resenaChannelId}>` });
             }
             if (interaction.commandName === 'configdm') {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                    return safeReply(interaction, { content: '🚫 Solo administradores.' });
                 data.config.dmEnabled = interaction.options.getBoolean('estado');
                 saveData(guild.id, data);
                 return safeReply(interaction, { content: `${E.settings} DMs: **${data.config.dmEnabled ? 'activados ✅' : 'desactivados ❌'}**` });
             }
             if (interaction.commandName === 'setdm') {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return safeReply(interaction, { content: '🚫 Solo administradores.' });
+                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator))
+                    return safeReply(interaction, { content: '🚫 Solo administradores.' });
                 data.config.dmCierreTexto = interaction.options.getString('texto');
                 saveData(guild.id, data);
                 return safeReply(interaction, { embeds: [new EmbedBuilder().setColor('#57F287')
@@ -2345,6 +2463,7 @@ client.on('interactionCreate', async (interaction) => {
                     .setDescription(`${E.line} ${data.config.dmCierreTexto}\n\n*Variables: \`{usuario}\` \`{servidor}\`*`)] });
             }
         });
+
     } catch (e) { if (!isIgnorableError(e)) console.error('❌ interactionCreate:', e?.message); }
 });
 
@@ -2352,9 +2471,19 @@ client.on('interactionCreate', async (interaction) => {
 function mostrarModalResena(interaction, ordenId) {
     const modal = new ModalBuilder().setCustomId(`modal_resena_${ordenId}`).setTitle(`⭐ Reseña — Orden #${ordenId}`);
     modal.addComponents(
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('estrellas').setLabel('Calificación (1 a 5 ⭐)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1).setPlaceholder('1 – 5')),
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('comentario').setLabel('Comentario (opcional)').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(300).setPlaceholder('Cuéntanos tu experiencia...')),
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('imagen_url').setLabel('URL de imagen (opcional)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('https://imgur.com/...'))
+        new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId('estrellas').setLabel('Calificación (1 a 5 ⭐)')
+                .setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1).setPlaceholder('1 – 5')
+        ),
+        new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId('comentario').setLabel('Comentario (opcional)')
+                .setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(300)
+                .setPlaceholder('Cuéntanos tu experiencia...')
+        ),
+        new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId('imagen_url').setLabel('URL de imagen (opcional)')
+                .setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('https://imgur.com/...')
+        )
     );
     return interaction.showModal(modal).catch(() => {});
 }

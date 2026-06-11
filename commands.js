@@ -13,13 +13,13 @@ const commands = [
         name: 'vender',
         description: 'Registra un nuevo pedido.',
         options: [
-            { name: 'producto', type: ApplicationCommandOptionType.String,  description: 'Producto o servicio vendido',              required: true  },
-            { name: 'cliente',  type: ApplicationCommandOptionType.User,    description: 'Usuario que realizó el pedido',            required: true  },
-            { name: 'vendedor', type: ApplicationCommandOptionType.User,    description: 'Operador que atendió el pedido',           required: true  },
-            { name: 'monto',    type: ApplicationCommandOptionType.String,  description: 'Cantidad del producto (ej: 1000, 1k)',     required: false },
-            { name: 'precio',   type: ApplicationCommandOptionType.String,  description: 'Precio cobrado (ej: $5 USD, 130 MXN)',    required: false },
-            { name: 'metodo',   type: ApplicationCommandOptionType.String,  description: 'Método de pago (PayPal, Binance, etc.)',  required: false },
-            { name: 'notas',    type: ApplicationCommandOptionType.String,  description: 'Notas adicionales del pedido',            required: false }
+            { name: 'producto', type: ApplicationCommandOptionType.String,  description: 'Producto o servicio vendido',             required: true  },
+            { name: 'cliente',  type: ApplicationCommandOptionType.User,    description: 'Usuario que realizó el pedido',           required: true  },
+            { name: 'vendedor', type: ApplicationCommandOptionType.User,    description: 'Operador que atendió el pedido',          required: true  },
+            { name: 'monto',    type: ApplicationCommandOptionType.String,  description: 'Cantidad del producto (ej: 1000, 1k)',    required: false },
+            { name: 'precio',   type: ApplicationCommandOptionType.String,  description: 'Precio cobrado (ej: $5 USD, 130 MXN)',   required: false },
+            { name: 'metodo',   type: ApplicationCommandOptionType.String,  description: 'Método de pago (PayPal, Binance, etc.)', required: false },
+            { name: 'notas',    type: ApplicationCommandOptionType.String,  description: 'Notas adicionales del pedido',           required: false }
         ]
     },
     {
@@ -149,12 +149,12 @@ const commands = [
             },
             {
                 name: 'categoria', type: ApplicationCommandOptionType.Channel,
-                description: 'Categoría donde se crearán los canales de ticket', required: false,
+                description: 'Categoría de Discord donde se crearán los canales de ticket', required: false,
                 channel_types: [ChannelType.GuildCategory]
             },
             {
                 name: 'logs', type: ApplicationCommandOptionType.Channel,
-                description: 'Canal donde se guardan los transcripts', required: false,
+                description: 'Canal donde se guardan los transcripts y logs', required: false,
                 channel_types: [ChannelType.GuildText]
             },
             {
@@ -163,7 +163,11 @@ const commands = [
             },
             {
                 name: 'rol_staff', type: ApplicationCommandOptionType.Role,
-                description: 'Rol de staff que puede ver y cerrar tickets', required: false
+                description: 'Rol de staff que puede ver y gestionar tickets', required: false
+            },
+            {
+                name: 'imagen', type: ApplicationCommandOptionType.String,
+                description: 'URL de imagen para el banner del panel (https://...)', required: false
             }
         ]
     },
@@ -175,7 +179,7 @@ const commands = [
         options: [
             {
                 name: 'rol', type: ApplicationCommandOptionType.Role,
-                description: 'Rol VIP que se asignará/quitará automáticamente',
+                description: 'Rol VIP que se asignará y quitará automáticamente al expirar',
                 required: true
             }
         ]
@@ -184,8 +188,8 @@ const commands = [
         name: 'clubvip',
         description: 'Asigna membresía VIP a un usuario con duración definida.',
         options: [
-            { name: 'cliente',  type: ApplicationCommandOptionType.User,   description: 'Usuario al que se le asigna el VIP',           required: true  },
-            { name: 'duracion', type: ApplicationCommandOptionType.String, description: 'Duración (ej: 7d, 30d, 2h). Max 365d',          required: true  }
+            { name: 'cliente',  type: ApplicationCommandOptionType.User,   description: 'Usuario al que se le asigna el VIP',  required: true },
+            { name: 'duracion', type: ApplicationCommandOptionType.String, description: 'Duración (ej: 7d, 30d, 2h). Max 365d', required: true }
         ]
     },
 
@@ -201,42 +205,42 @@ const commands = [
         name: 'anuncio',
         description: 'Envía un anuncio con embed al canal actual.',
         options: [
-            { name: 'titulo',       type: ApplicationCommandOptionType.String, description: 'Título del anuncio',                        required: true  },
-            { name: 'mensaje',      type: ApplicationCommandOptionType.String, description: 'Cuerpo del anuncio',                        required: true  },
-            { name: 'imagen',       type: ApplicationCommandOptionType.String, description: 'URL de imagen (https://...)',               required: false },
-            { name: 'texto_boton',  type: ApplicationCommandOptionType.String, description: 'Texto del botón de enlace (opcional)',      required: false },
-            { name: 'enlace_boton', type: ApplicationCommandOptionType.String, description: 'URL del botón (https://...)',               required: false }
+            { name: 'titulo',       type: ApplicationCommandOptionType.String, description: 'Título del anuncio',                       required: true  },
+            { name: 'mensaje',      type: ApplicationCommandOptionType.String, description: 'Cuerpo del anuncio',                       required: true  },
+            { name: 'imagen',       type: ApplicationCommandOptionType.String, description: 'URL de imagen (https://...)',              required: false },
+            { name: 'texto_boton',  type: ApplicationCommandOptionType.String, description: 'Texto del botón de enlace (opcional)',     required: false },
+            { name: 'enlace_boton', type: ApplicationCommandOptionType.String, description: 'URL del botón (https://...)',              required: false }
         ]
     },
     {
         name: 'sorteo',
-        description: 'Crea un sorteo con roles opcionales de bonus. (Solo admins)',
+        description: 'Crea un sorteo con roles opcionales de bonus (solo admins).',
         options: [
-            { name: 'premio',      type: ApplicationCommandOptionType.String,  description: 'Premio del sorteo',                              required: true  },
-            { name: 'duracion',    type: ApplicationCommandOptionType.String,  description: 'Duración (ej: 30s, 10m, 2h, 1d)',               required: true  },
-            { name: 'ganadores',   type: ApplicationCommandOptionType.Integer, description: 'Cantidad de ganadores (por defecto 1)',           required: false },
-            { name: 'imagen',      type: ApplicationCommandOptionType.String,  description: 'URL de imagen personalizada (https://...)',       required: false },
+            { name: 'premio',     type: ApplicationCommandOptionType.String,  description: 'Premio del sorteo',                        required: true  },
+            { name: 'duracion',   type: ApplicationCommandOptionType.String,  description: 'Duración (ej: 30s, 10m, 2h, 1d)',          required: true  },
+            { name: 'ganadores',  type: ApplicationCommandOptionType.Integer, description: 'Cantidad de ganadores (por defecto 1)',     required: false },
+            { name: 'imagen',     type: ApplicationCommandOptionType.String,  description: 'URL de imagen personalizada (https://...)', required: false },
             // Rol 1
-            { name: 'rol_1',       type: ApplicationCommandOptionType.Role,    description: 'Rol con bonus de participaciones',               required: false },
-            { name: 'entradas_1',  type: ApplicationCommandOptionType.Integer, description: 'Participaciones para rol_1 (ej: 3)',             required: false },
+            { name: 'rol_1',      type: ApplicationCommandOptionType.Role,    description: 'Rol con bonus de participaciones',         required: false },
+            { name: 'entradas_1', type: ApplicationCommandOptionType.Integer, description: 'Participaciones para rol_1 (ej: 3)',        required: false },
             // Rol 2
-            { name: 'rol_2',       type: ApplicationCommandOptionType.Role,    description: 'Segundo rol con bonus',                          required: false },
-            { name: 'entradas_2',  type: ApplicationCommandOptionType.Integer, description: 'Participaciones para rol_2',                     required: false },
+            { name: 'rol_2',      type: ApplicationCommandOptionType.Role,    description: 'Segundo rol con bonus',                    required: false },
+            { name: 'entradas_2', type: ApplicationCommandOptionType.Integer, description: 'Participaciones para rol_2',               required: false },
             // Rol 3
-            { name: 'rol_3',       type: ApplicationCommandOptionType.Role,    description: 'Tercer rol con bonus',                           required: false },
-            { name: 'entradas_3',  type: ApplicationCommandOptionType.Integer, description: 'Participaciones para rol_3',                     required: false },
+            { name: 'rol_3',      type: ApplicationCommandOptionType.Role,    description: 'Tercer rol con bonus',                     required: false },
+            { name: 'entradas_3', type: ApplicationCommandOptionType.Integer, description: 'Participaciones para rol_3',               required: false },
             // Rol 4
-            { name: 'rol_4',       type: ApplicationCommandOptionType.Role,    description: 'Cuarto rol con bonus',                           required: false },
-            { name: 'entradas_4',  type: ApplicationCommandOptionType.Integer, description: 'Participaciones para rol_4',                     required: false }
+            { name: 'rol_4',      type: ApplicationCommandOptionType.Role,    description: 'Cuarto rol con bonus',                     required: false },
+            { name: 'entradas_4', type: ApplicationCommandOptionType.Integer, description: 'Participaciones para rol_4',               required: false }
         ]
     },
     {
         name: 'notificar',
-        description: 'Envía un DM masivo a todos los clientes registrados. (Solo admins)',
+        description: 'Envía un DM masivo a todos los clientes registrados (solo admins).',
         options: [
-            { name: 'mensaje',      type: ApplicationCommandOptionType.String,  description: 'Cuerpo del mensaje',                          required: true  },
-            { name: 'titulo',       type: ApplicationCommandOptionType.String,  description: 'Título del embed (opcional)',                  required: false },
-            { name: 'imagen',       type: ApplicationCommandOptionType.String,  description: 'URL de imagen (https://...)',                  required: false },
+            { name: 'mensaje',      type: ApplicationCommandOptionType.String,  description: 'Cuerpo del mensaje',                         required: true  },
+            { name: 'titulo',       type: ApplicationCommandOptionType.String,  description: 'Título del embed (opcional)',                 required: false },
+            { name: 'imagen',       type: ApplicationCommandOptionType.String,  description: 'URL de imagen (https://...)',                 required: false },
             { name: 'solo_activos', type: ApplicationCommandOptionType.Boolean, description: 'Solo clientes activos en los últimos 30 días', required: false }
         ]
     },
@@ -284,7 +288,7 @@ const commands = [
         options: [
             {
                 name: 'texto', type: ApplicationCommandOptionType.String,
-                description: 'Mensaje personalizado. Variables disponibles: {usuario} {servidor}',
+                description: 'Mensaje. Variables disponibles: {usuario} {servidor}',
                 required: true
             }
         ]
@@ -293,14 +297,14 @@ const commands = [
         name: 'settiers',
         description: 'Configura roles automáticos por número de compras (solo admins).',
         options: [
-            { name: 'bronce',        type: ApplicationCommandOptionType.Role,    description: 'Rol para Bronce',                          required: false },
-            { name: 'plata',         type: ApplicationCommandOptionType.Role,    description: 'Rol para Plata',                           required: false },
-            { name: 'oro',           type: ApplicationCommandOptionType.Role,    description: 'Rol para Oro',                             required: false },
-            { name: 'vip',           type: ApplicationCommandOptionType.Role,    description: 'Rol para VIP',                             required: false },
-            { name: 'umbral_bronce', type: ApplicationCommandOptionType.Integer, description: 'Compras mínimas para Bronce (def: 1)',     required: false },
-            { name: 'umbral_plata',  type: ApplicationCommandOptionType.Integer, description: 'Compras mínimas para Plata (def: 5)',      required: false },
-            { name: 'umbral_oro',    type: ApplicationCommandOptionType.Integer, description: 'Compras mínimas para Oro (def: 10)',       required: false },
-            { name: 'umbral_vip',    type: ApplicationCommandOptionType.Integer, description: 'Compras mínimas para VIP (def: 20)',       required: false }
+            { name: 'bronce',        type: ApplicationCommandOptionType.Role,    description: 'Rol para Bronce',                        required: false },
+            { name: 'plata',         type: ApplicationCommandOptionType.Role,    description: 'Rol para Plata',                         required: false },
+            { name: 'oro',           type: ApplicationCommandOptionType.Role,    description: 'Rol para Oro',                           required: false },
+            { name: 'vip',           type: ApplicationCommandOptionType.Role,    description: 'Rol para VIP',                           required: false },
+            { name: 'umbral_bronce', type: ApplicationCommandOptionType.Integer, description: 'Compras mínimas para Bronce (def: 1)',   required: false },
+            { name: 'umbral_plata',  type: ApplicationCommandOptionType.Integer, description: 'Compras mínimas para Plata (def: 5)',    required: false },
+            { name: 'umbral_oro',    type: ApplicationCommandOptionType.Integer, description: 'Compras mínimas para Oro (def: 10)',     required: false },
+            { name: 'umbral_vip',    type: ApplicationCommandOptionType.Integer, description: 'Compras mínimas para VIP (def: 20)',     required: false }
         ]
     },
     {
